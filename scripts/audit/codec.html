@@ -1,0 +1,126 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>codec audit</title>
+<script type="module">
+  import { FFmpeg } from '/ffmpeg-esm/index.js';
+  const out = { env: {}, webcodecs: {} };
+
+  async function cfg(api, c) {
+    try {
+      const r = await api.isConfigSupported(c);
+      return { supported: r.supported };
+    } catch (e) {
+      return { error: String(e) };
+    }
+  }
+
+  window.detect = async () => {
+    out.env = {
+      ua: navigator.userAgent,
+      crossOriginIsolated: self.crossOriginIsolated,
+      sab: typeof SharedArrayBuffer !== 'undefined',
+      videoDecoder: typeof VideoDecoder !== 'undefined',
+      videoEncoder: typeof VideoEncoder !== 'undefined',
+      wakeLock: !!navigator.wakeLock,
+      indexedDB: !!window.indexedDB,
+      offscreenCanvas: typeof OffscreenCanvas !== 'undefined',
+      webgpu: !!navigator.gpu,
+      cores: navigator.hardwareConcurrency,
+      deviceMemory: navigator.deviceMemory ?? null,
+    };
+    try {
+      const a = await navigator.gpu?.requestAdapter();
+      out.env.webgpuAdapter = a ? a.info?.description || a.info?.vendor || 'yes' : null;
+      out.env.webgpuF16 = a ? a.features.has('shader-f16') : null;
+    } catch (e) {
+      out.env.webgpuAdapter = 'err ' + e;
+    }
+    if (out.env.videoDecoder) {
+      const base = { codedWidth: 1080, codedHeight: 1920 };
+      for (const codec of ['hev1.1.6.L93.B0', 'hvc1.1.6.L93.B0', 'hvc1.1.6.L120.B0', 'hvc1.2.4.L120.B0', 'avc1.64002A', 'vp09.00.40.08', 'av01.0.08M.08'])
+        for (const hw of ['no-preference', 'prefer-hardware', 'prefer-software'])
+          out.webcodecs[`dec ${codec} ${hw}`] = await cfg(VideoDecoder, { codec, ...base, hardwareAcceleration: hw });
+    }
+    if (out.env.videoEncoder) {
+      for (const codec of ['avc1.42001f', 'avc1.4d001f', 'avc1.640028'])
+        for (const hw of ['no-preference', 'prefer-hardware', 'prefer-software'])
+          out.webcodecs[`enc ${codec} 720x1280 ${hw}`] = await cfg(VideoEncoder, {
+            codec, width: 720, height: 1280, bitrate: 3000000, framerate: 30, hardwareAcceleration: hw,
+          });
+    }
+    return out;
+  };
+
+  let ffInst = null;
+  async function load(multi) {
+    if (ffInst) {
+      try { ffInst.terminate(); } catch {}
+      ffInst = null;
+    }
+    const ff = new FFmpeg();
+    const dir = `${location.origin}/ffmpeg/${multi ? 'mt' : 'st'}`;
+    await ff.load({
+      classWorkerURL: `${location.origin}/ffmpeg/lib/worker.js`,
+      coreURL: `${dir}/ffmpeg-core.js`,
+      wasmURL: `${dir}/ffmpeg-core.wasm`,
+      ...(multi ? { workerURL: `${dir}/ffmpeg-core.worker.js` } : {}),
+    });
+    ffInst = ff;
+    return ff;
+  }
+
+  window.ffCaps = async (multi) => {
+    const ff = await load(multi);
+    const lines = [];
+    ff.on('log', ({ message }) => lines.push(message));
+    await ff.exec(['-hide_banner', '-decoders']);
+    await ff.exec(['-hide_banner', '-encoders']);
+    await ff.exec(['-hide_banner', '-filters']);
+    await ff.exec(['-hide_banner', '-demuxers']);
+    const has = (re) => lines.some((l) => re.test(l));
+    const codecRe = (n) => new RegExp('^\\s*[VAS][F.][S.][X.][B.][D.]\\s+' + n + '\\s');
+    const filterRe = (n) => new RegExp('^\\s*[T.][S.][C.]\\s+' + n + '\\s');
+    return {
+      decoders: Object.fromEntries(['h264', 'hevc', 'vp9', 'av1', 'libdav1d', 'prores', 'mpeg4', 'aac', 'mp3', 'opus'].map((n) => [n, has(codecRe(n))])),
+      encoders: Object.fromEntries(['libx264', 'libx265', 'aac', 'libvpx', 'libvpx-vp9', 'libmp3lame', 'libopus'].map((n) => [n, has(codecRe(n))])),
+      filters: Object.fromEntries(
+        ['scale', 'pad', 'fps', 'zscale', 'tonemap', 'colorspace', 'subtitles', 'ass', 'select', 'scdet', 'blurdetect', 'freezedetect', 'signalstats', 'afade', 'amix', 'volume', 'concat', 'xfade'].map((n) => [n, has(filterRe(n))]),
+      ),
+    };
+  };
+
+  // Normalise one clip to 720x1280 / 30fps / H.264 yuv420p / AAC. Bytes come back as base64.
+  window.normalise = async (name, multi, extraVf) => {
+    const ff = await load(multi);
+    const log = [];
+    ff.on('log', ({ message }) => log.push(message));
+    const buf = new Uint8Array(await (await fetch('/vid/' + name)).arrayBuffer());
+    await ff.writeFile('in_' + name, buf);
+    const vf = [extraVf, 'scale=720:1280:force_original_aspect_ratio=decrease', 'pad=720:1280:(ow-iw)/2:(oh-ih)/2', 'fps=30', 'format=yuv420p'].filter(Boolean).join(',');
+    const t0 = performance.now();
+    let code, err = null;
+    try {
+      code = await ff.exec(
+        ['-threads', '1', '-i', 'in_' + name, '-vf', vf, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '26', '-threads', '2', '-c:a', 'aac', '-ar', '44100', '-ac', '2', '-movflags', '+faststart', 'out.mp4'],
+        120000,
+      );
+    } catch (e) {
+      err = String(e);
+    }
+    const ms = Math.round(performance.now() - t0);
+    let b64 = null,
+      size = 0;
+    try {
+      const data = await ff.readFile('out.mp4');
+      size = data.length;
+      let s = '';
+      for (let i = 0; i < data.length; i += 0x8000) s += String.fromCharCode.apply(null, data.subarray(i, i + 0x8000));
+      b64 = btoa(s);
+    } catch {}
+    return {
+      name, multi, code, err, ms, size, b64,
+      tail: log.filter((l) => /Stream #|Error|error|Unsupported|not supported|Invalid|Unknown|fail/i.test(l)).slice(0, 14),
+    };
+  };
+  window.ready = true;
+</script>

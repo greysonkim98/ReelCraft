@@ -1,0 +1,37 @@
+# Render Blueprint for the API. Free plan with NO payment method on the Render account: when a
+# free limit is reached Render suspends the service instead of billing (see docs/launch-checklist.md).
+services:
+  - type: web
+    name: reelcraft-api
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm ci && npm run build -w shared && npm run build -w backend
+    startCommand: node backend/dist/index.js
+    healthCheckPath: /api/v1/health
+    autoDeploy: false
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: FIREBASE_PROJECT_ID
+        value: reelcraft-4a7a7
+      # Firebase Hosting origins that may call the API, comma separated
+      - key: CLIENT_ORIGIN
+        value: https://reelcraft-4a7a7.web.app,https://reelcraft-4a7a7.firebaseapp.com
+      - key: TRUST_PROXY_HOPS
+        value: "1"
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-20b
+      - key: GROQ_FALLBACK_MODEL
+        value: openai/gpt-oss-120b
+      - key: AI_PER_USER_PER_DAY
+        value: "3"
+      - key: GLOBAL_DAILY_AI_CAP
+        value: "60"
+      - key: IP_DAILY_CAP
+        value: "0"
+      # Secrets: paste them in the Render dashboard, never commit them
+      - key: GROQ_API_KEY
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false

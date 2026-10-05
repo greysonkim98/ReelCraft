@@ -1,0 +1,39 @@
+rules_version = '2';
+
+// Every write goes through the backend (Admin SDK bypasses these rules). Clients may only read
+// their own documents, so a user cannot touch their own daily usage counter.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Profile
+    match /users/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // Render jobs: scenes.json, script JSON and progress
+    match /projects/{projectId} {
+      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow write: if false;
+    }
+
+    // Log of Groq calls
+    match /aiUsage/{entryId} {
+      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow write: if false;
+    }
+
+    // Daily counters (per account, per IP hash, service-wide): server only. The app reads its own
+    // counter through GET /api/v1/me/usage.
+    match /dailyStats/{statId} {
+      allow read, write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

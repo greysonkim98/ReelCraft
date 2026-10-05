@@ -1,0 +1,33 @@
+{
+  "name": "reelcraft",
+  "private": true,
+  "workspaces": [
+    "shared",
+    "backend",
+    "frontend"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "npm run build -w shared && npm run build -w backend && npm run build -w frontend",
+    "dev:backend": "npm run build -w shared && npm run dev -w backend",
+    "dev:frontend": "npm run build -w shared && npm run dev -w frontend",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "typecheck": "npm run build -w shared && npm run typecheck -w backend && npm run typecheck -w frontend",
+    "test": "npm run build -w shared && npm test -w backend && npm test -w frontend",
+    "verify:render": "tsx scripts/verify-render.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.0.0"
+  },
+  "dependencies": {
+    "firebase": "^12.19.0"
+  }
+}

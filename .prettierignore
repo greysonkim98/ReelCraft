@@ -1,0 +1,6 @@
+node_modules
+dist
+.next
+frontend/public
+package-lock.json
+.scratch
