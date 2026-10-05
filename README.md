@@ -1,39 +1,54 @@
 # ReelCraft
 
-휴대폰 영상 여러 개를 받아 AI 자막이 들어간 60초 이하 세로 릴스(720×1280, 9:16 MP4)를 만드는 웹앱.
-**영상은 브라우저 밖으로 나가지 않습니다.** 분석·자르기·자막 입히기·인코딩은 모두 브라우저의
-ffmpeg.wasm에서 하고, 서버는 로그인 확인·사용량 제한·AI 자막 호출만 맡습니다. 화면은 영어입니다.
+A web app that turns several phone videos into a vertical reel of up to 60 seconds (720×1280, 9:16 MP4) with AI-generated captions.
 
-> 현재 상태: 로그인(Firebase) → 클립 → 스타일 → 분석 → AI 자막(Groq) → 검토 → 렌더 → 공유까지 동작합니다.
-> 아직 없는 것: SigLIP 2 장면 태그, Kokoro 보이스오버(TTS), 단계별 로컬 저장, 장애 대응 매트릭스 전체.
-> 배포 설정(Render, Firebase Hosting)은 파일만 있고 실제 배포는 하지 않았습니다.
+**Your videos never leave the browser.** Analysis, trimming, caption burn-in, and encoding all run in the browser with ffmpeg.wasm. The server only handles sign-in verification, usage limits, and the AI caption call. The UI is in English.
 
-## 시작하기
-- 로컬 실행과 점검: [docs/local-testing.md](docs/local-testing.md)
-- 배포와 비용 원칙, 해야 할 일: [docs/launch-checklist.md](docs/launch-checklist.md)
-- 구성요소 점검 결과: [docs/component-audit.md](docs/component-audit.md)
+> **Current status:** sign-in (Firebase) → clips → style → analysis → AI captions (Groq) → review → render → share all work.
+> **Not built yet:** SigLIP 2 scene tagging, Kokoro voice-over (TTS), per-step local saving, and the full failure-handling matrix.
+> Deployment configs (Render, Firebase Hosting) exist as files, but nothing has been deployed.
 
-## 구조
+## Getting started
+
+Requires Node.js 20 or newer.
+
+```bash
+npm install
+cp .env.example .env        # then fill in the values
+npm run dev:backend         # API on http://localhost:4000
+npm run dev:frontend        # app on http://localhost:3000
 ```
-shared/    공용 타입, zod 스키마(scenes.json / script JSON), 상수와 한도
-backend/   Express + Socket.IO. Groq(gpt-oss-20b) 호출, Firebase 토큰 검증, 하루 사용량 제한
-frontend/  Next.js(정적 내보내기), lib/ffmpeg/ (브라우저 안 분석·렌더링), lib/auth·api·realtime
-scripts/   verify-render.ts, browser-smoke.ts, audit/ (실험·정적 서버)
+
+Other scripts: `npm run build`, `npm test`, `npm run typecheck`, `npm run lint`, `npm run format`, `npm run verify:render`.
+
+More documentation:
+
+- Running and checking locally: [docs/local-testing.md](docs/local-testing.md)
+- Deployment, cost principles, and to-do list: [docs/launch-checklist.md](docs/launch-checklist.md)
+- Component audit results: [docs/component-audit.md](docs/component-audit.md)
+
+## Project structure
+
+```
+shared/    Shared types, zod schemas (scenes.json / script JSON), constants and limits
+backend/   Express + Socket.IO. Calls Groq (gpt-oss-20b), verifies Firebase tokens, enforces daily usage limits
+frontend/  Next.js (static export). lib/ffmpeg/ holds in-browser analysis and rendering; lib/auth, api, realtime
+scripts/   verify-render.ts, browser-smoke.ts, audit/ (experiments and a static server)
 firebase.json, firestore.rules, render.yaml
 ```
 
-## 서버 API
-| 경로 | 설명 |
-| --- | --- |
-| `GET /api/v1/health` | 상태 확인 (로그인 불필요) |
-| `GET /api/v1/me/usage` | 오늘 남은 AI 자막 횟수 |
-| `POST /api/v1/ai/script` | scenes.json → script JSON. 로그인 필요, 계정당 하루 3회·전체 하루 60회 |
-| Socket.IO `project:progress` | 같은 계정의 다른 기기에 진행률 전달. 2분 무활동·15분 최대로 자동 종료 |
+## Server API
 
-## ffmpeg.wasm 주의사항 (직접 측정한 것)
-- **스레드 수를 반드시 제한합니다** ([threads.ts](frontend/lib/ffmpeg/threads.ts)). `@ffmpeg/core-mt`는
-  워커 32개가 고정이라, ffmpeg 기본값(코어 수만큼)으로 두면 0%에서 영원히 멈춥니다.
-- **RGB 변환을 강제하는 필터는 쓰지 않습니다** ([filters.ts](frontend/lib/ffmpeg/filters.ts)).
-  YUV→RGB 변환이 프레임당 메모리를 흘려 렌더가 OOM으로 죽습니다.
-- 입력 클립이 20개를 넘으면 렌더가 자동으로 단일 스레드 코어(느린 모드)로 전환됩니다.
-- `@ffmpeg/core`는 GPL-2.0-or-later(x264/x265 포함)입니다. 고지 페이지(`/licenses`)와 법률 검토가 필요합니다.
+| Route | Description |
+| --- | --- |
+| `GET /api/v1/health` | Health check (no sign-in required) |
+| `GET /api/v1/me/usage` | AI caption uses left today |
+| `POST /api/v1/ai/script` | scenes.json → script JSON. Requires sign-in. Limited to 3 calls per account per day and 60 per day overall |
+| Socket.IO `project:progress` | Sends progress to the same account's other devices. Closes automatically after 2 minutes of inactivity or 15 minutes total |
+
+## ffmpeg.wasm notes (measured, not assumed)
+
+- **Always cap the thread count** ([threads.ts](frontend/lib/ffmpeg/threads.ts)). `@ffmpeg/core-mt` has a fixed pool of 32 workers, so leaving ffmpeg's default (one thread per core) makes the render hang at 0% forever.
+- **Avoid filters that force an RGB conversion** ([filters.ts](frontend/lib/ffmpeg/filters.ts)). The YUV→RGB conversion leaks memory on every frame and the render dies from out-of-memory.
+- If there are more than 20 input clips, the render automatically switches to the single-threaded core (slow mode).
+- `@ffmpeg/core` is GPL-2.0-or-later (it includes x264/x265). This needs a notice page (`/licenses`) and a legal review.
