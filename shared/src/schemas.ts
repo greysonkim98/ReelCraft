@@ -144,3 +144,17 @@ export const progressEventSchema = z.object({
   message: z.string().max(200).optional(),
 });
 export type ProgressEvent = z.infer<typeof progressEventSchema>;
+
+/** PUT /me/style: the style a user picked first; new projects start from it. */
+export const stylePreferenceSchema = z.object({ style: styleSchema });
+export type StylePreference = z.infer<typeof stylePreferenceSchema>;
+
+/** PATCH /projects/:id: only what a user edits. Everything else is written by the server. */
+export const projectPatchSchema = z
+  .object({
+    title: z.string().trim().min(1).max(SCRIPT_TITLE_MAX_CHARS).optional(),
+    style: styleSchema.optional(),
+    script: scriptSchema.optional(),
+  })
+  .refine((p) => Object.keys(p).length > 0, { message: 'nothing to update' });
+export type ProjectPatch = z.infer<typeof projectPatchSchema>;

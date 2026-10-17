@@ -12,6 +12,7 @@ import type { ProjectStore } from './services/projects';
 import { noopNotifier, type Notifier } from './services/realtime';
 import type { ScriptService } from './services/script';
 import type { UsageStore } from './services/usage';
+import { createMemoryUserStore, type UserStore } from './services/users';
 
 export interface AppDeps {
   env: Env;
@@ -19,11 +20,12 @@ export interface AppDeps {
   verifier: TokenVerifier;
   usage: UsageStore;
   projects: ProjectStore;
+  users?: UserStore;
   notifier?: Notifier;
   logger?: Logger;
 }
 
-export function createApp({ env, script, verifier, usage, projects, notifier, logger }: AppDeps): Express {
+export function createApp({ env, script, verifier, usage, projects, users, notifier, logger }: AppDeps): Express {
   const log = logger ?? pino({ level: env.NODE_ENV === 'test' ? 'silent' : 'info' });
   const app = express();
 
@@ -69,6 +71,7 @@ export function createApp({ env, script, verifier, usage, projects, notifier, lo
       verifier,
       usage,
       projects,
+      users: users ?? createMemoryUserStore(),
       notifier: notifier ?? noopNotifier,
       limits: { perUser: env.AI_PER_USER_PER_DAY, global: env.GLOBAL_DAILY_AI_CAP, perIp: env.IP_DAILY_CAP },
       ipHashSalt: env.IP_HASH_SALT,

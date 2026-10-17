@@ -1,4 +1,11 @@
-import type { ApiErrorBody, GenerateScriptResponse, ScriptRequestInput, UsageInfo } from '@reelcraft/shared';
+import type {
+  ApiErrorBody,
+  GenerateScriptResponse,
+  Role,
+  ScriptRequestInput,
+  Style,
+  UsageInfo,
+} from '@reelcraft/shared';
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
@@ -43,3 +50,7 @@ export const getUsage = (token: string) => request<UsageInfo>('/me/usage', { tok
 /** scenes.json in, script JSON out. Costs one of the account's daily AI uses. */
 export const generateScript = (token: string, body: ScriptRequestInput) =>
   request<GenerateScriptResponse>('/ai/script', { method: 'POST', token, body: JSON.stringify(body) });
+
+/** Creates the profile on first sign-in (users/{uid}) and returns the saved role and style. */
+export const startSession = (token: string) =>
+  request<{ email?: string; role?: Role; style?: Style }>('/me/session', { method: 'POST', token });
