@@ -1,10 +1,5 @@
-import { Landing } from '@/components/Landing';
-import { AuthProvider } from '@/lib/auth';
+import { HomeLanding } from '@/components/HomeLanding';
 
 export default function Home() {
-  return (
-    <AuthProvider mode="signin">
-      <Landing />
-    </AuthProvider>
-  );
+  return <HomeLanding />;
 }

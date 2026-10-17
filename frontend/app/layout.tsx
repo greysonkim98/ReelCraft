@@ -7,7 +7,7 @@ export const metadata: Metadata = {
   description: 'Turn phone clips into a captioned vertical reel, right in your browser.',
 };
 
-export const viewport: Viewport = { width: 'device-width', initialScale: 1 };
+export const viewport: Viewport = { width: 'device-width', initialScale: 1, themeColor: '#101214' };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
