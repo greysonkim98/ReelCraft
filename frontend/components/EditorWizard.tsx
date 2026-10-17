@@ -16,6 +16,8 @@ import {
   type UsageInfo,
 } from '@reelcraft/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
+import { Icon } from './ui/Icon';
 import { ApiError, generateScript, getHealth, getUsage } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { analyzeClips, type AnalyzeProgress } from '@/lib/ffmpeg/analyze';
@@ -36,13 +38,26 @@ interface ClipItem {
 
 const LIMITS = DEFAULT_LIMITS;
 const STEPS = ['Clips', 'Style', 'Analyze', 'Captions', 'Review', 'Render', 'Share'] as const;
+const STAGE_DESCRIPTIONS = [
+  'Start with the moments you want to keep.',
+  'Set the mood. Make it feel like you.',
+  'Find the little moments that tell a bigger story.',
+  'A few words can bring your story to life.',
+  'Fine-tune your scenes and make every word count.',
+  'Bring it all together, right on your device.',
+  'Your story is ready for the world.',
+];
 
 const fmtBytes = (n: number) =>
   n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(2)} GB` : `${(n / 1024 ** 2).toFixed(1)} MB`;
 const fmtSec = (n: number) => `${n.toFixed(1)}s`;
 const round1 = (n: number) => Math.round(n * 10) / 10;
 const fmtReset = (iso: string) =>
-  new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
+  new Date(iso).toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  });
 
 const COLOR_SWATCH: Record<string, string> = {
   natural: 'from-slate-300 to-slate-500',
@@ -53,14 +68,24 @@ const COLOR_SWATCH: Record<string, string> = {
   mono: 'from-neutral-200 to-neutral-800',
 };
 
-function Card({ selected, onClick, children }: { selected: boolean; onClick: () => void; children: React.ReactNode }) {
+function Card({
+  selected,
+  onClick,
+  children,
+}: {
+  selected: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={selected}
       className={`rounded-xl border-2 p-3 text-left text-sm transition ${
-        selected ? 'border-slate-900 bg-white shadow' : 'border-slate-200 bg-white hover:border-slate-400'
+        selected
+          ? 'border-slate-900 bg-white shadow'
+          : 'border-slate-200 bg-white hover:border-slate-400'
       }`}
     >
       {children}
@@ -79,7 +104,10 @@ function ProgressBar({ value, label }: { value: number; label?: string }) {
         aria-valuemin={0}
         aria-valuemax={100}
       >
-        <div className="h-full bg-slate-900 transition-all" style={{ width: `${Math.round(value * 100)}%` }} />
+        <div
+          className="h-full bg-slate-900 transition-all"
+          style={{ width: `${Math.round(value * 100)}%` }}
+        />
       </div>
     </div>
   );
@@ -87,25 +115,54 @@ function ProgressBar({ value, label }: { value: number; label?: string }) {
 
 export function EditorWizard() {
   const { user, signOut, getToken } = useAuth();
-  const [step, setStep] = useState(1);
+  const pathname = usePathname();
+  const router = useRouter();
+  const stage = pathname.split('/')[2]?.toLowerCase() ?? 'clips';
+  const step = Math.max(1, STEPS.findIndex((label) => label.toLowerCase() === stage) + 1);
+  const setStep = useCallback(
+    (n: number) => router.push(`/editor/${STEPS[n - 1]!.toLowerCase()}`, { scroll: false }),
+    [router],
+  );
   const [maxStep, setMaxStep] = useState(1);
   const [clips, setClips] = useState<ClipItem[]>([]);
   const [messages, setMessages] = useState<string[]>([]);
   const [importing, setImporting] = useState(false);
-  const [style, setStyle] = useState<Style>({ color: 'natural', subtitle: 'classic', tempo: 'energetic', quality: '720p' });
+  const [style, setStyle] = useState<Style>({
+    color: 'natural',
+    subtitle: 'classic',
+    tempo: 'energetic',
+    quality: '720p',
+  });
 
   const [segments, setSegments] = useState<Segment[]>([]);
   const [unusedClips, setUnusedClips] = useState<number[]>([]);
   const [hasAudio, setHasAudio] = useState<boolean[]>([]);
   const [analysisNotes, setAnalysisNotes] = useState<string[]>([]);
-  const [analysis, setAnalysis] = useState<{ running: boolean; progress?: AnalyzeProgress; error?: string }>({ running: false });
+  const [analysis, setAnalysis] = useState<{
+    running: boolean;
+    progress?: AnalyzeProgress;
+    error?: string;
+  }>({ running: false });
 
   const [userPrompt, setUserPrompt] = useState('');
   const [usage, setUsage] = useState<UsageInfo | null>(null);
-  const [ai, setAi] = useState<{ running: boolean; error?: string; done?: boolean; fallback?: boolean; model?: string | null }>({
+  const [ai, setAi] = useState<{
+    running: boolean;
+    error?: string;
+    done?: boolean;
+    fallback?: boolean;
+    model?: string | null;
+  }>({
     running: false,
   });
-  const [render, setRender] = useState<{ running: boolean; fraction: number; eta?: number; error?: string; memory?: boolean; notice?: string }>({
+  const [render, setRender] = useState<{
+    running: boolean;
+    fraction: number;
+    eta?: number;
+    error?: string;
+    memory?: boolean;
+    notice?: string;
+  }>({
     running: false,
     fraction: 0,
   });
@@ -115,6 +172,33 @@ export function EditorWizard() {
   const [serverState, setServerState] = useState<'checking' | 'waking' | 'up' | 'down'>('checking');
   const abortRef = useRef<AbortController | null>(null);
   const reporterRef = useRef<ProgressReporter | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const color = params.get('look');
+    const subtitle = params.get('subtitle');
+    const tempo = params.get('tempo');
+    setStyle((previous) => ({
+      ...previous,
+      color: COLOR_LOOKS.includes(color as Style['color'])
+        ? (color as Style['color'])
+        : previous.color,
+      subtitle: SUBTITLE_STYLES.includes(subtitle as Style['subtitle'])
+        ? (subtitle as Style['subtitle'])
+        : previous.subtitle,
+      tempo: TEMPOS.includes(tempo as Style['tempo']) ? (tempo as Style['tempo']) : previous.tempo,
+    }));
+  }, []);
+
+  useEffect(() => {
+    if (!clips.length) return;
+    const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnBeforeLeaving);
+    return () => window.removeEventListener('beforeunload', warnBeforeLeaving);
+  }, [clips.length]);
 
   useEffect(() => {
     setIsolated(window.crossOriginIsolated);
@@ -143,12 +227,16 @@ export function EditorWizard() {
 
   useEffect(() => () => reporterRef.current?.close(), []);
 
-  const goto = useCallback((n: number) => {
-    setStep(n);
-    setMaxStep((m) => Math.max(m, n));
-  }, []);
+  const goto = useCallback(
+    (n: number) => {
+      setStep(n);
+      setMaxStep((m) => Math.max(m, n));
+    },
+    [setStep],
+  );
 
-  const report = (stage: ProgressStage, percent: number, message?: string) => reporterRef.current?.report(stage, percent, message);
+  const report = (stage: ProgressStage, percent: number, message?: string) =>
+    reporterRef.current?.report(stage, percent, message);
 
   const totalSize = clips.reduce((s, c) => s + c.file.size, 0);
   const limitBytes = LIMITS.maxTotalMB * 1024 * 1024;
@@ -169,13 +257,17 @@ export function EditorWizard() {
         continue;
       }
       if (used + file.size > limitBytes) {
-        notes.push(`${file.name}: not added, it would go over the ${LIMITS.maxTotalMB} MB total limit.`);
+        notes.push(
+          `${file.name}: not added, it would go over the ${LIMITS.maxTotalMB} MB total limit.`,
+        );
         continue;
       }
       try {
         const info = await readClipInfo(file);
         if (info.duration > LIMITS.maxClipSeconds) {
-          notes.push(`${file.name}: longer than the ${LIMITS.maxClipSeconds / 60}-minute limit per clip (${fmtSec(info.duration)}).`);
+          notes.push(
+            `${file.name}: longer than the ${LIMITS.maxClipSeconds / 60}-minute limit per clip (${fmtSec(info.duration)}).`,
+          );
           continue;
         }
         const fingerprint = await computeFingerprint(file);
@@ -185,7 +277,14 @@ export function EditorWizard() {
         }
         known.add(fingerprint);
         used += file.size;
-        accepted.push({ id: crypto.randomUUID(), file, duration: info.duration, thumbnail: info.thumbnail, fingerprint, note: '' });
+        accepted.push({
+          id: crypto.randomUUID(),
+          file,
+          duration: info.duration,
+          thumbnail: info.thumbnail,
+          fingerprint,
+          note: '',
+        });
       } catch (err) {
         notes.push(`${file.name}: ${(err as Error).message}`);
       }
@@ -240,7 +339,10 @@ export function EditorWizard() {
       setAnalysisNotes(result.notes);
       setAnalysis({ running: false });
     } catch (err) {
-      setAnalysis({ running: false, error: err instanceof CancelledError ? 'Analysis cancelled.' : (err as Error).message });
+      setAnalysis({
+        running: false,
+        error: err instanceof CancelledError ? 'Analysis cancelled.' : (err as Error).message,
+      });
     }
   }
 
@@ -274,7 +376,9 @@ export function EditorWizard() {
         userMemos: memos,
       });
       const byId = new Map(res.script.scenes.map((l) => [l.scene_id, l.caption]));
-      setSegments((prev) => prev.map((s) => ({ ...s, subtitle: byId.get(s.id) ?? s.subtitle, editedByUser: false })));
+      setSegments((prev) =>
+        prev.map((s) => ({ ...s, subtitle: byId.get(s.id) ?? s.subtitle, editedByUser: false })),
+      );
       setUsage(res.usage);
       reporterRef.current?.close();
       reporterRef.current = createProgressReporter({ projectId: res.projectId, getToken });
@@ -285,7 +389,13 @@ export function EditorWizard() {
         const details = e.details as { usage?: UsageInfo } | undefined;
         if (details?.usage) setUsage({ ...details.usage, remaining: 0 });
       }
-      setAi({ running: false, error: e.code === 'UNAUTHENTICATED' ? 'Your session expired. Go back to the home page and sign in again.' : e.message });
+      setAi({
+        running: false,
+        error:
+          e.code === 'UNAUTHENTICATED'
+            ? 'Your session expired. Go back to the home page and sign in again.'
+            : e.message,
+      });
     }
   }
 
@@ -358,8 +468,10 @@ export function EditorWizard() {
       goto(7);
     } catch (err) {
       report('failed', 0);
-      if (err instanceof CancelledError) setRender({ running: false, fraction: 0, error: 'Rendering cancelled.' });
-      else if (err instanceof RenderMemoryError) setRender({ running: false, fraction: 0, error: err.message, memory: true });
+      if (err instanceof CancelledError)
+        setRender({ running: false, fraction: 0, error: 'Rendering cancelled.' });
+      else if (err instanceof RenderMemoryError)
+        setRender({ running: false, fraction: 0, error: err.message, memory: true });
       else setRender({ running: false, fraction: 0, error: (err as Error).message });
     }
   }
@@ -374,7 +486,9 @@ export function EditorWizard() {
   const [canShare, setCanShare] = useState(false);
   useEffect(() => {
     if (!output || typeof navigator.canShare !== 'function') return setCanShare(false);
-    setCanShare(navigator.canShare({ files: [new File([output.blob], fileName, { type: 'video/mp4' })] }));
+    setCanShare(
+      navigator.canShare({ files: [new File([output.blob], fileName, { type: 'video/mp4' })] }),
+    );
   }, [output, fileName]);
 
   async function share() {
@@ -388,32 +502,52 @@ export function EditorWizard() {
 
   // ---------- UI ----------
   const nextDisabled =
-    (step === 1 && clips.length === 0) || (step === 3 && segments.length === 0) || (step === 5 && (overLimit || segments.length === 0));
+    clips.length === 0 ||
+    (step >= 3 && segments.length === 0) ||
+    (step === 5 && overLimit) ||
+    (step === 6 && !output);
 
   return (
-    <main className="mx-auto max-w-xl px-4 pb-24 pt-6">
-      <header className="mb-4">
+    <div className="editor-workspace">
+      <header className="editor-heading">
+        <span className="eyebrow">THE REELCRAFT EDITOR / STEP {String(step).padStart(2, '0')}</span>
         <div className="flex items-start justify-between gap-2">
-          <h1 className="text-xl font-bold">ReelCraft editor</h1>
+          <h1>
+            Your next great reel<span className="mint">.</span>
+          </h1>
           <div className="flex shrink-0 items-center gap-2 text-xs text-slate-600">
             <span className="max-w-[10rem] truncate" title={user?.email ?? undefined}>
               {user?.email}
             </span>
-            <button type="button" onClick={() => void signOut()} className="rounded bg-slate-200 px-2 py-1 font-medium text-slate-800">
-              Sign out
-            </button>
+            {user && (
+              <button
+                type="button"
+                onClick={() => void signOut()}
+                className="rounded bg-slate-200 px-2 py-1 font-medium text-slate-800"
+              >
+                Sign out
+              </button>
+            )}
           </div>
         </div>
-        <p className="text-xs text-slate-500">
-          Your videos never leave this device. Analysis, editing and encoding all happen in your browser.
-        </p>
+        <p className="text-xs text-slate-500">{STAGE_DESCRIPTIONS[step - 1]}</p>
         <div className="mt-2 flex flex-wrap gap-2 text-xs">
-          <span className={`rounded-full px-2 py-0.5 ${isolated ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'}`}>
-            {isolated === null ? 'Checking…' : isolated ? 'Multi-thread ffmpeg' : 'Slow mode (single thread)'}
+          <span
+            className={`rounded-full px-2 py-0.5 ${isolated ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'}`}
+          >
+            {isolated === null
+              ? 'Preparing editor…'
+              : isolated
+                ? 'Fast processing available'
+                : 'Standard processing mode'}
           </span>
           <span
             className={`rounded-full px-2 py-0.5 ${
-              serverState === 'up' ? 'bg-emerald-100 text-emerald-800' : serverState === 'down' ? 'bg-rose-100 text-rose-800' : 'bg-slate-200 text-slate-700'
+              serverState === 'up'
+                ? 'bg-emerald-100 text-emerald-800'
+                : serverState === 'down'
+                  ? 'bg-rose-100 text-rose-800'
+                  : 'bg-slate-200 text-slate-700'
             }`}
           >
             {serverState === 'up' && 'Server connected'}
@@ -422,14 +556,17 @@ export function EditorWizard() {
             {serverState === 'down' && 'Server unreachable'}
           </span>
           {usage && (
-            <span className="rounded-full bg-slate-200 px-2 py-0.5 text-slate-700" data-testid="usage">
+            <span
+              className="rounded-full bg-slate-200 px-2 py-0.5 text-slate-700"
+              data-testid="usage"
+            >
               {usage.remaining} of {usage.limit} AI caption runs left today
             </span>
           )}
         </div>
       </header>
 
-      <nav aria-label="Steps" className="mb-5 flex gap-1 overflow-x-auto pb-1">
+      <nav aria-label="Steps" className="editor-steps">
         {STEPS.map((label, i) => {
           const n = i + 1;
           const reachable = n <= maxStep;
@@ -437,464 +574,742 @@ export function EditorWizard() {
             <button
               key={label}
               type="button"
-              disabled={!reachable || render.running || analysis.running}
+              disabled={!reachable || render.running || analysis.running || ai.running || importing}
               onClick={() => setStep(n)}
               aria-current={step === n ? 'step' : undefined}
               className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${
-                step === n ? 'bg-slate-900 text-white' : reachable ? 'bg-slate-200 text-slate-800' : 'bg-slate-100 text-slate-400'
+                step === n
+                  ? 'bg-slate-900 text-white'
+                  : reachable
+                    ? 'bg-slate-200 text-slate-800'
+                    : 'bg-slate-100 text-slate-400'
               }`}
             >
-              {n}. {label}
+              <span className="step-circle">
+                {n < step ? <Icon name="check" size={14} /> : String(n).padStart(2, '0')}
+              </span>
+              <span>{label}</span>
             </button>
           );
         })}
       </nav>
 
-      {step === 1 && (
-        <section aria-labelledby="s1" className="space-y-4">
-          <h2 id="s1" className="text-lg font-semibold">Add your clips</h2>
-          <div>
-            <ProgressBar value={Math.min(1, totalSize / limitBytes)} label={`${fmtBytes(totalSize)} of ${LIMITS.maxTotalMB} MB`} />
-          </div>
-          <label
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
-              e.preventDefault();
-              if (dragFrom.current === null) void addFiles([...e.dataTransfer.files]);
-            }}
-            className="flex cursor-pointer flex-col items-center gap-1 rounded-xl border-2 border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-600 hover:border-slate-500"
-          >
-            <span className="font-medium">{importing ? 'Reading…' : 'Choose videos or drop them here'}</span>
-            <span className="text-xs">Up to {LIMITS.maxClipSeconds / 60} minutes per clip</span>
-            <input
-              type="file"
-              accept="video/*"
-              multiple
-              className="sr-only"
-              disabled={importing}
-              onChange={(e) => {
-                void addFiles([...(e.target.files ?? [])]);
-                e.target.value = '';
-              }}
-            />
-          </label>
-          {messages.length > 0 && (
-            <ul className="space-y-1 rounded-lg bg-rose-50 p-3 text-xs text-rose-800" role="alert">
-              {messages.map((m) => (
-                <li key={m}>{m}</li>
-              ))}
-            </ul>
+      <div className="editor-grid">
+        <div className="editor-step-panel">
+          {step > 1 && clips.length === 0 && (
+            <div className="notice">
+              This editing session has no clips yet.{' '}
+              <button className="text-link" onClick={() => setStep(1)}>
+                Start by adding your videos
+              </button>
+              . Edits remain in this tab while you work.
+            </div>
           )}
-          <ol className="space-y-2">
-            {clips.map((c, i) => (
-              <li
-                key={c.id}
-                draggable
-                onDragStart={() => (dragFrom.current = i)}
+
+          {step === 1 && (
+            <section aria-labelledby="s1" className="space-y-4">
+              <div className="section-heading">
+                <div>
+                  <h2 id="s1" className="text-lg font-semibold">
+                    Bring your moments
+                  </h2>
+                  <p className="muted">Every good story starts with a few clips.</p>
+                </div>
+                <span className="count-pill">{clips.length} clips</span>
+              </div>
+              <div>
+                <ProgressBar
+                  value={Math.min(1, totalSize / limitBytes)}
+                  label={`${fmtBytes(totalSize)} of ${LIMITS.maxTotalMB} MB`}
+                />
+              </div>
+              <label
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => {
                   e.preventDefault();
-                  e.stopPropagation();
-                  if (dragFrom.current !== null) moveClip(dragFrom.current, i);
-                  dragFrom.current = null;
+                  if (dragFrom.current === null && !importing)
+                    void addFiles([...e.dataTransfer.files]);
                 }}
-                onDragEnd={() => (dragFrom.current = null)}
-                className="flex gap-3 rounded-xl bg-white p-3 shadow-sm"
+                className="clip-dropzone"
               >
-                {c.thumbnail ? (
-                  <img src={c.thumbnail} alt="" className="h-20 w-14 shrink-0 rounded object-cover" />
-                ) : (
-                  <div className="h-20 w-14 shrink-0 rounded bg-slate-200" />
-                )}
-                <div className="min-w-0 flex-1 space-y-1">
-                  <div className="truncate text-sm font-medium">
-                    {i + 1}. {c.file.name}
+                <span className="upload-symbol">
+                  <Icon name="upload" size={28} />
+                </span>
+                <span className="font-medium">
+                  {importing ? 'Reading…' : 'Choose videos or drop them here'}
+                </span>
+                <span className="text-xs">
+                  MP4, MOV, WebM and more · Up to {LIMITS.maxClipSeconds / 60} minutes per clip
+                </span>
+                <span className="button primary">
+                  {importing ? 'Reading your clips…' : 'Browse videos'}{' '}
+                  <Icon name="plus" size={16} />
+                </span>
+                <input
+                  type="file"
+                  accept="video/*"
+                  multiple
+                  className="sr-only"
+                  disabled={importing}
+                  onChange={(e) => {
+                    void addFiles([...(e.target.files ?? [])]);
+                    e.target.value = '';
+                  }}
+                />
+              </label>
+              {!clips.length && (
+                <div className="import-tips">
+                  <div>
+                    <Icon name="shield" />
+                    <h3>Private by design</h3>
+                    <p>Your original footage stays right here on your device.</p>
                   </div>
-                  <div className="text-xs text-slate-500">
-                    {fmtSec(c.duration)} · {fmtBytes(c.file.size)}
+                  <div>
+                    <Icon name="film" />
+                    <h3>A little goes a long way</h3>
+                    <p>Choose a few favorite moments for a reel up to 60 seconds.</p>
                   </div>
-                  <input
-                    value={c.note}
-                    maxLength={NOTE_MAX_CHARS}
-                    aria-label={`${c.file.name} note`}
-                    placeholder="Where were you, how did it feel? e.g. Santa Cruz, waves and golden light"
-                    onChange={(e) => setClips((prev) => prev.map((x) => (x.id === c.id ? { ...x, note: e.target.value } : x)))}
-                    className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
-                  />
                 </div>
-                <div className="flex flex-col gap-1">
-                  <button type="button" aria-label="Move up" onClick={() => moveClip(i, i - 1)} className="rounded bg-slate-100 px-2 text-xs">
-                    ↑
-                  </button>
-                  <button type="button" aria-label="Move down" onClick={() => moveClip(i, i + 1)} className="rounded bg-slate-100 px-2 text-xs">
-                    ↓
-                  </button>
+              )}
+              {messages.length > 0 && (
+                <ul
+                  className="space-y-1 rounded-lg bg-rose-50 p-3 text-xs text-rose-800"
+                  role="alert"
+                >
+                  {messages.map((m) => (
+                    <li key={m}>{m}</li>
+                  ))}
+                </ul>
+              )}
+              <ol className="space-y-2">
+                {clips.map((c, i) => (
+                  <li
+                    key={c.id}
+                    draggable
+                    onDragStart={() => (dragFrom.current = i)}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (dragFrom.current !== null) moveClip(dragFrom.current, i);
+                      dragFrom.current = null;
+                    }}
+                    onDragEnd={() => (dragFrom.current = null)}
+                    className="flex gap-3 rounded-xl bg-white p-3 shadow-sm"
+                  >
+                    {c.thumbnail ? (
+                      <img
+                        src={c.thumbnail}
+                        alt=""
+                        className="h-20 w-14 shrink-0 rounded object-cover"
+                      />
+                    ) : (
+                      <div className="h-20 w-14 shrink-0 rounded bg-slate-200" />
+                    )}
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <div className="truncate text-sm font-medium">
+                        {i + 1}. {c.file.name}
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        {fmtSec(c.duration)} · {fmtBytes(c.file.size)}
+                      </div>
+                      <input
+                        value={c.note}
+                        maxLength={NOTE_MAX_CHARS}
+                        aria-label={`${c.file.name} note`}
+                        placeholder="Where were you, how did it feel? e.g. Santa Cruz, waves and golden light"
+                        onChange={(e) =>
+                          setClips((prev) =>
+                            prev.map((x) => (x.id === c.id ? { ...x, note: e.target.value } : x)),
+                          )
+                        }
+                        className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <button
+                        type="button"
+                        aria-label="Move up"
+                        onClick={() => moveClip(i, i - 1)}
+                        className="rounded bg-slate-100 px-2 text-xs"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="Move down"
+                        onClick={() => moveClip(i, i + 1)}
+                        className="rounded bg-slate-100 px-2 text-xs"
+                      >
+                        ↓
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="Remove"
+                        onClick={() => {
+                          setClips((prev) => prev.filter((x) => x.id !== c.id));
+                          resetAnalysis();
+                        }}
+                        className="rounded bg-rose-100 px-2 text-xs text-rose-700"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
+
+          {step === 2 && (
+            <section aria-labelledby="s2" className="space-y-5">
+              <h2 id="s2" className="text-lg font-semibold">
+                Pick a style
+              </h2>
+              <fieldset className="space-y-2">
+                <legend className="text-sm font-medium">Color look</legend>
+                <div className="grid grid-cols-3 gap-2">
+                  {COLOR_LOOKS.map((c) => (
+                    <Card
+                      key={c}
+                      selected={style.color === c}
+                      onClick={() => setStyle({ ...style, color: c })}
+                    >
+                      <div className={`mb-2 h-10 rounded bg-gradient-to-br ${COLOR_SWATCH[c]}`} />
+                      <span className="capitalize">{c}</span>
+                    </Card>
+                  ))}
+                </div>
+              </fieldset>
+              <fieldset className="space-y-2">
+                <legend className="text-sm font-medium">Caption style</legend>
+                <div className="grid grid-cols-2 gap-2">
+                  {SUBTITLE_STYLES.map((s) => (
+                    <Card
+                      key={s}
+                      selected={style.subtitle === s}
+                      onClick={() => setStyle({ ...style, subtitle: s })}
+                    >
+                      <div className="mb-2 flex h-12 items-end justify-center rounded bg-slate-700 pb-1">
+                        <span
+                          className={
+                            s === 'classic'
+                              ? 'text-sm font-bold text-white [text-shadow:0_0_3px_#000,0_0_3px_#000]'
+                              : s === 'box'
+                                ? 'bg-black/60 px-1 text-sm font-bold text-white'
+                                : s === 'pop'
+                                  ? 'text-base font-extrabold text-yellow-300 [text-shadow:0_0_4px_#000,0_0_4px_#000]'
+                                  : 'text-xs font-bold text-white [text-shadow:1px_2px_2px_#000]'
+                          }
+                        >
+                          Salt air, zero plans
+                        </span>
+                      </div>
+                      <span className="capitalize">{s}</span>
+                    </Card>
+                  ))}
+                </div>
+              </fieldset>
+              <fieldset className="space-y-2">
+                <legend className="text-sm font-medium">Editing pace</legend>
+                <div className="grid grid-cols-2 gap-2">
+                  {TEMPOS.map((t) => (
+                    <Card
+                      key={t}
+                      selected={style.tempo === t}
+                      onClick={() => setStyle({ ...style, tempo: t })}
+                    >
+                      <div className="font-medium capitalize">{t}</div>
+                      <div className="text-xs text-slate-500">
+                        {t === 'energetic' ? '1–2 second cuts, fast' : '3–5 second cuts, relaxed'}
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              </fieldset>
+              <p className="text-xs text-slate-500">
+                The video is exported as 720×1280 (9:16), the Instagram Reels format.
+              </p>
+              <div className="planned-feature">
+                <Icon name="volume" />
+                <div>
+                  <strong>
+                    AI narration <span className="count-pill">Coming later</span>
+                  </strong>
+                  <p>
+                    Voice selection and narration are planned. Your original clip audio is used in
+                    this version.
+                  </p>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {step === 3 && (
+            <section aria-labelledby="s3" className="space-y-4">
+              <h2 id="s3" className="text-lg font-semibold">
+                Find the best scenes
+              </h2>
+              <p className="text-sm text-slate-600">
+                Analyzes {clips.length} clip{clips.length === 1 ? '' : 's'} in your browser and
+                drafts {style.tempo === 'energetic' ? '1–2' : '3–5'} second cuts.
+              </p>
+              {analysis.running ? (
+                <div className="space-y-3">
+                  <ProgressBar
+                    value={analysis.progress?.overall ?? 0}
+                    label={
+                      analysis.progress
+                        ? `${Math.round(analysis.progress.overall * 100)}% · clip ${analysis.progress.clipIndex + 1}/${clips.length} (${
+                            analysis.progress.stage === 'proxy'
+                              ? 'making preview'
+                              : 'checking quality'
+                          })`
+                        : 'Loading ffmpeg…'
+                    }
+                  />
                   <button
                     type="button"
-                    aria-label="Remove"
-                    onClick={() => {
-                      setClips((prev) => prev.filter((x) => x.id !== c.id));
-                      resetAnalysis();
-                    }}
-                    className="rounded bg-rose-100 px-2 text-xs text-rose-700"
+                    onClick={cancelJob}
+                    className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white"
                   >
-                    ✕
+                    Cancel
                   </button>
                 </div>
-              </li>
-            ))}
-          </ol>
-        </section>
-      )}
-
-      {step === 2 && (
-        <section aria-labelledby="s2" className="space-y-5">
-          <h2 id="s2" className="text-lg font-semibold">Pick a style</h2>
-          <fieldset className="space-y-2">
-            <legend className="text-sm font-medium">Color look</legend>
-            <div className="grid grid-cols-3 gap-2">
-              {COLOR_LOOKS.map((c) => (
-                <Card key={c} selected={style.color === c} onClick={() => setStyle({ ...style, color: c })}>
-                  <div className={`mb-2 h-10 rounded bg-gradient-to-br ${COLOR_SWATCH[c]}`} />
-                  <span className="capitalize">{c}</span>
-                </Card>
-              ))}
-            </div>
-          </fieldset>
-          <fieldset className="space-y-2">
-            <legend className="text-sm font-medium">Caption style</legend>
-            <div className="grid grid-cols-2 gap-2">
-              {SUBTITLE_STYLES.map((s) => (
-                <Card key={s} selected={style.subtitle === s} onClick={() => setStyle({ ...style, subtitle: s })}>
-                  <div className="mb-2 flex h-12 items-end justify-center rounded bg-slate-700 pb-1">
-                    <span
-                      className={
-                        s === 'classic'
-                          ? 'text-sm font-bold text-white [text-shadow:0_0_3px_#000,0_0_3px_#000]'
-                          : s === 'box'
-                            ? 'bg-black/60 px-1 text-sm font-bold text-white'
-                            : s === 'pop'
-                              ? 'text-base font-extrabold text-yellow-300 [text-shadow:0_0_4px_#000,0_0_4px_#000]'
-                              : 'text-xs font-bold text-white [text-shadow:1px_2px_2px_#000]'
-                      }
-                    >
-                      Salt air, zero plans
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void runAnalysis()}
+                  disabled={clips.length === 0}
+                  className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+                >
+                  {segments.length > 0 ? 'Analyze again' : 'Start analysis'}
+                </button>
+              )}
+              {analysis.error && (
+                <p
+                  role="alert"
+                  data-testid="analysis-error"
+                  className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800"
+                >
+                  {analysis.error}
+                </p>
+              )}
+              {analysisNotes.length > 0 && (
+                <ul className="space-y-1 rounded-lg bg-amber-50 p-3 text-xs text-amber-900">
+                  {analysisNotes.map((n) => (
+                    <li key={n}>{n}</li>
+                  ))}
+                </ul>
+              )}
+              {segments.length > 0 && (
+                <div
+                  className="rounded-lg bg-white p-3 text-sm shadow-sm"
+                  data-testid="analysis-summary"
+                >
+                  {segments.length} scene{segments.length === 1 ? '' : 's'} · {fmtSec(totalSeconds)}{' '}
+                  total
+                  {unusedClips.length > 0 && (
+                    <span className="text-slate-500">
+                      {' '}
+                      · unused clips: {unusedClips.map((i) => i + 1).join(', ')}
                     </span>
-                  </div>
-                  <span className="capitalize">{s}</span>
-                </Card>
-              ))}
-            </div>
-          </fieldset>
-          <fieldset className="space-y-2">
-            <legend className="text-sm font-medium">Editing pace</legend>
-            <div className="grid grid-cols-2 gap-2">
-              {TEMPOS.map((t) => (
-                <Card key={t} selected={style.tempo === t} onClick={() => setStyle({ ...style, tempo: t })}>
-                  <div className="font-medium capitalize">{t}</div>
-                  <div className="text-xs text-slate-500">{t === 'energetic' ? '1–2 second cuts, fast' : '3–5 second cuts, relaxed'}</div>
-                </Card>
-              ))}
-            </div>
-          </fieldset>
-          <p className="text-xs text-slate-500">The video is exported as 720×1280 (9:16), the Instagram Reels format.</p>
-        </section>
-      )}
+                  )}
+                </div>
+              )}
+            </section>
+          )}
 
-      {step === 3 && (
-        <section aria-labelledby="s3" className="space-y-4">
-          <h2 id="s3" className="text-lg font-semibold">Find the best scenes</h2>
-          <p className="text-sm text-slate-600">
-            Analyzes {clips.length} clip{clips.length === 1 ? '' : 's'} in your browser and drafts {style.tempo === 'energetic' ? '1–2' : '3–5'} second cuts.
-          </p>
-          {analysis.running ? (
-            <div className="space-y-3">
-              <ProgressBar
-                value={analysis.progress?.overall ?? 0}
-                label={
-                  analysis.progress
-                    ? `${Math.round(analysis.progress.overall * 100)}% · clip ${analysis.progress.clipIndex + 1}/${clips.length} (${
-                        analysis.progress.stage === 'proxy' ? 'making preview' : 'checking quality'
-                      })`
-                    : 'Loading ffmpeg…'
-                }
-              />
-              <button type="button" onClick={cancelJob} className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white">
-                Cancel
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => void runAnalysis()}
-              disabled={clips.length === 0}
-              className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
-            >
-              {segments.length > 0 ? 'Analyze again' : 'Start analysis'}
-            </button>
+          {step === 4 && (
+            <section aria-labelledby="s4" className="space-y-4">
+              <h2 id="s4" className="text-lg font-semibold">
+                AI captions
+              </h2>
+              <p className="text-sm text-slate-600">
+                Describe the reel you want. Only this sentence, your clip notes and each
+                scene&apos;s length are sent to the AI. Your video is not.
+              </p>
+              <label className="block space-y-1 text-sm">
+                <span className="font-medium">What kind of reel is this?</span>
+                <input
+                  value={userPrompt}
+                  maxLength={USER_PROMPT_MAX_CHARS}
+                  onChange={(e) => setUserPrompt(e.target.value)}
+                  placeholder="e.g. relaxing weekend trip with friends"
+                  className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                />
+              </label>
+              <p className="text-xs text-slate-500">
+                {memos.length > 0
+                  ? `Using ${memos.length} clip note${memos.length === 1 ? '' : 's'}: names of places and people come only from your notes.`
+                  : 'No clip notes yet. Add notes in step 1 to get captions that mention real places.'}
+              </p>
+              {usage && (
+                <p className="text-xs text-slate-500">
+                  {outOfUses
+                    ? `You have used all ${usage.limit} AI runs for today. They reset at ${fmtReset(usage.resetAt)}. You can still write captions yourself.`
+                    : `${usage.remaining} of ${usage.limit} AI runs left today.`}
+                </p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void runAi()}
+                  disabled={
+                    !user ||
+                    ai.running ||
+                    segments.length === 0 ||
+                    userPrompt.trim() === '' ||
+                    outOfUses
+                  }
+                  className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+                >
+                  {ai.running
+                    ? 'Writing captions…'
+                    : segments.some((s) => s.subtitle)
+                      ? 'Write them again'
+                      : 'Write captions with AI'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => goto(5)}
+                  className="rounded-lg bg-slate-200 px-4 py-2 text-sm font-semibold"
+                >
+                  Write captions myself
+                </button>
+              </div>
+              {!user && (
+                <p className="notice">
+                  AI captions require sign-in. You can write captions yourself in this preview.{' '}
+                  <a href="/login">Sign in with Google</a>
+                </p>
+              )}
+              {ai.error && (
+                <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">
+                  {ai.error}
+                </p>
+              )}
+              {ai.done && !ai.fallback && (
+                <p
+                  className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800"
+                  data-testid="ai-done"
+                >
+                  Done. Review and edit the captions in the next step.
+                </p>
+              )}
+              {ai.done && ai.fallback && (
+                <p
+                  className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900"
+                  data-testid="ai-fallback"
+                >
+                  The AI was busy, so these captions are built from your notes. You can edit them in
+                  the next step, and this did not use up a run.
+                </p>
+              )}
+              <ol className="space-y-1 text-sm">
+                {segments.map((s, i) => (
+                  <li key={s.id} className="rounded bg-white px-3 py-2 shadow-sm">
+                    <span className="text-xs text-slate-400">{i + 1}.</span>{' '}
+                    {s.subtitle || <span className="text-slate-400">(empty)</span>}
+                  </li>
+                ))}
+              </ol>
+            </section>
           )}
-          {analysis.error && (
-            <p role="alert" data-testid="analysis-error" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">
-              {analysis.error}
-            </p>
-          )}
-          {analysisNotes.length > 0 && (
-            <ul className="space-y-1 rounded-lg bg-amber-50 p-3 text-xs text-amber-900">
-              {analysisNotes.map((n) => (
-                <li key={n}>{n}</li>
-              ))}
-            </ul>
-          )}
-          {segments.length > 0 && (
-            <div className="rounded-lg bg-white p-3 text-sm shadow-sm" data-testid="analysis-summary">
-              {segments.length} scene{segments.length === 1 ? '' : 's'} · {fmtSec(totalSeconds)} total
-              {unusedClips.length > 0 && <span className="text-slate-500"> · unused clips: {unusedClips.map((i) => i + 1).join(', ')}</span>}
-            </div>
-          )}
-        </section>
-      )}
 
-      {step === 4 && (
-        <section aria-labelledby="s4" className="space-y-4">
-          <h2 id="s4" className="text-lg font-semibold">AI captions</h2>
-          <p className="text-sm text-slate-600">
-            Describe the reel you want. Only this sentence, your clip notes and each scene&apos;s length are sent to the AI. Your video is not.
-          </p>
-          <label className="block space-y-1 text-sm">
-            <span className="font-medium">What kind of reel is this?</span>
-            <input
-              value={userPrompt}
-              maxLength={USER_PROMPT_MAX_CHARS}
-              onChange={(e) => setUserPrompt(e.target.value)}
-              placeholder="e.g. relaxing weekend trip with friends"
-              className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
-            />
-          </label>
-          <p className="text-xs text-slate-500">
-            {memos.length > 0 ? `Using ${memos.length} clip note${memos.length === 1 ? '' : 's'}: names of places and people come only from your notes.` : 'No clip notes yet. Add notes in step 1 to get captions that mention real places.'}
-          </p>
-          {usage && (
-            <p className="text-xs text-slate-500">
-              {outOfUses
-                ? `You have used all ${usage.limit} AI runs for today. They reset at ${fmtReset(usage.resetAt)}. You can still write captions yourself.`
-                : `${usage.remaining} of ${usage.limit} AI runs left today.`}
-            </p>
+          {step === 5 && (
+            <section aria-labelledby="s5" className="space-y-4">
+              <h2 id="s5" className="text-lg font-semibold">
+                Review and edit
+              </h2>
+              <div
+                className={`rounded-lg p-3 text-sm ${overLimit ? 'bg-rose-50 text-rose-800' : 'bg-white shadow-sm'}`}
+                role={overLimit ? 'alert' : undefined}
+              >
+                Total length {fmtSec(totalSeconds)} of {LIMITS.maxOutputSeconds}s
+                {overLimit && ' — too long to render. Shorten some scenes.'}
+              </div>
+              <ol className="space-y-3">
+                {segments.map((s, i) => (
+                  <li key={s.id} className="space-y-2 rounded-xl bg-white p-3 shadow-sm">
+                    <div className="flex items-center justify-between text-xs text-slate-500">
+                      <span>
+                        {i + 1}. Clip {s.clipIndex + 1} · {clips[s.clipIndex]?.file.name}
+                      </span>
+                      <span className="flex gap-1">
+                        <button
+                          type="button"
+                          aria-label="Move up"
+                          onClick={() => moveSegment(i, i - 1)}
+                          className="rounded bg-slate-100 px-2"
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Move down"
+                          onClick={() => moveSegment(i, i + 1)}
+                          className="rounded bg-slate-100 px-2"
+                        >
+                          ↓
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Remove"
+                          onClick={() => {
+                            setSegments((prev) => prev.filter((x) => x.id !== s.id));
+                            setUnusedClips((prev) =>
+                              segments.some((x) => x.id !== s.id && x.clipIndex === s.clipIndex)
+                                ? prev
+                                : [...prev, s.clipIndex].sort(),
+                            );
+                          }}
+                          className="rounded bg-rose-100 px-2 text-rose-700"
+                        >
+                          ✕
+                        </button>
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs">
+                      <label className="flex items-center gap-1">
+                        Start
+                        <input
+                          type="number"
+                          step={0.1}
+                          min={0}
+                          max={Math.max(0, s.end - 0.5)}
+                          value={s.start}
+                          onChange={(e) =>
+                            patchSegment(s.id, { start: Math.max(0, Number(e.target.value)) })
+                          }
+                          className="w-16 rounded border border-slate-300 px-1 py-0.5"
+                        />
+                      </label>
+                      <label className="flex items-center gap-1">
+                        End
+                        <input
+                          type="number"
+                          step={0.1}
+                          min={s.start + 0.5}
+                          max={clips[s.clipIndex]?.duration}
+                          value={s.end}
+                          onChange={(e) =>
+                            patchSegment(s.id, {
+                              end: Math.min(
+                                clips[s.clipIndex]?.duration ?? Infinity,
+                                Number(e.target.value),
+                              ),
+                            })
+                          }
+                          className="w-16 rounded border border-slate-300 px-1 py-0.5"
+                        />
+                      </label>
+                      <span className="text-slate-500">{fmtSec(s.end - s.start)}</span>
+                    </div>
+                    <div>
+                      <textarea
+                        rows={2}
+                        value={s.subtitle}
+                        maxLength={s.maxChars}
+                        aria-label={`Scene ${i + 1} caption`}
+                        onChange={(e) =>
+                          patchSegment(s.id, { subtitle: e.target.value, editedByUser: true })
+                        }
+                        className="w-full resize-none rounded border border-slate-300 px-2 py-1 text-sm"
+                      />
+                      <div
+                        className={`text-right text-xs ${s.subtitle.length >= s.maxChars ? 'text-amber-700' : 'text-slate-400'}`}
+                      >
+                        {s.subtitle.length}/{s.maxChars}
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+              {unusedClips.length > 0 && (
+                <div className="space-y-2 rounded-xl bg-white p-3 text-sm shadow-sm">
+                  <div className="font-medium">Unused clips</div>
+                  {unusedClips.map((i) => (
+                    <div key={i} className="flex items-center justify-between text-xs">
+                      <span className="truncate">
+                        {i + 1}. {clips[i]?.file.name}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => addUnused(i)}
+                        className="rounded bg-slate-900 px-2 py-1 text-white"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
           )}
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => void runAi()}
-              disabled={ai.running || segments.length === 0 || userPrompt.trim() === '' || outOfUses}
-              className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
-            >
-              {ai.running ? 'Writing captions…' : segments.some((s) => s.subtitle) ? 'Write them again' : 'Write captions with AI'}
-            </button>
-            <button type="button" onClick={() => goto(5)} className="rounded-lg bg-slate-200 px-4 py-2 text-sm font-semibold">
-              Write captions myself
-            </button>
-          </div>
-          {ai.error && (
-            <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">
-              {ai.error}
-            </p>
-          )}
-          {ai.done && !ai.fallback && (
-            <p className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800" data-testid="ai-done">
-              Done. Review and edit the captions in the next step.
-            </p>
-          )}
-          {ai.done && ai.fallback && (
-            <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900" data-testid="ai-fallback">
-              The AI was busy, so these captions are built from your notes. You can edit them in the next step, and this did not use up a run.
-            </p>
-          )}
-          <ol className="space-y-1 text-sm">
-            {segments.map((s, i) => (
-              <li key={s.id} className="rounded bg-white px-3 py-2 shadow-sm">
-                <span className="text-xs text-slate-400">{i + 1}.</span> {s.subtitle || <span className="text-slate-400">(empty)</span>}
-              </li>
-            ))}
-          </ol>
-        </section>
-      )}
 
-      {step === 5 && (
-        <section aria-labelledby="s5" className="space-y-4">
-          <h2 id="s5" className="text-lg font-semibold">Review and edit</h2>
-          <div className={`rounded-lg p-3 text-sm ${overLimit ? 'bg-rose-50 text-rose-800' : 'bg-white shadow-sm'}`} role={overLimit ? 'alert' : undefined}>
-            Total length {fmtSec(totalSeconds)} of {LIMITS.maxOutputSeconds}s
-            {overLimit && ' — too long to render. Shorten some scenes.'}
-          </div>
-          <ol className="space-y-3">
-            {segments.map((s, i) => (
-              <li key={s.id} className="space-y-2 rounded-xl bg-white p-3 shadow-sm">
-                <div className="flex items-center justify-between text-xs text-slate-500">
-                  <span>
-                    {i + 1}. Clip {s.clipIndex + 1} · {clips[s.clipIndex]?.file.name}
-                  </span>
-                  <span className="flex gap-1">
-                    <button type="button" aria-label="Move up" onClick={() => moveSegment(i, i - 1)} className="rounded bg-slate-100 px-2">
-                      ↑
-                    </button>
-                    <button type="button" aria-label="Move down" onClick={() => moveSegment(i, i + 1)} className="rounded bg-slate-100 px-2">
-                      ↓
-                    </button>
+          {step === 6 && (
+            <section aria-labelledby="s6" className="space-y-4">
+              <h2 id="s6" className="text-lg font-semibold">
+                Render
+              </h2>
+              <p className="text-sm text-slate-600">
+                Encodes a {style.quality} vertical video from your original clips. Rendering uses no
+                AI, so you can redo it as often as you like.
+              </p>
+              {render.running ? (
+                <div className="space-y-3">
+                  <ProgressBar
+                    value={render.fraction}
+                    label={`${Math.round(render.fraction * 100)}%${render.eta !== undefined ? ` · about ${Math.ceil(render.eta)}s left` : ''}`}
+                  />
+                  <button
+                    type="button"
+                    onClick={cancelJob}
+                    className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void runRender()}
+                  disabled={overLimit || segments.length === 0}
+                  className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+                >
+                  Start rendering
+                </button>
+              )}
+              {render.notice && (
+                <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900">{render.notice}</p>
+              )}
+              {render.error && (
+                <div
+                  role="alert"
+                  data-testid="render-error"
+                  className="space-y-2 rounded-lg bg-rose-50 p-3 text-sm text-rose-800"
+                >
+                  <p>{render.error}</p>
+                  {render.memory && (
+                    <p className="text-xs">
+                      Try fewer or shorter scenes, or close other tabs and apps, then render again.
+                    </p>
+                  )}
+                </div>
+              )}
+            </section>
+          )}
+
+          {step === 7 && (
+            <section aria-labelledby="s7" className="space-y-4">
+              <h2 id="s7" className="text-lg font-semibold">
+                Share or download
+              </h2>
+              {output ? (
+                <>
+                  <video
+                    src={output.url}
+                    controls
+                    playsInline
+                    className="mx-auto max-h-[70vh] rounded-xl bg-black"
+                  />
+                  <div className="text-xs text-slate-500">{fmtBytes(output.blob.size)}</div>
+                  {canShare ? (
                     <button
                       type="button"
-                      aria-label="Remove"
-                      onClick={() => {
-                        setSegments((prev) => prev.filter((x) => x.id !== s.id));
-                        setUnusedClips((prev) =>
-                          segments.some((x) => x.id !== s.id && x.clipIndex === s.clipIndex) ? prev : [...prev, s.clipIndex].sort(),
-                        );
-                      }}
-                      className="rounded bg-rose-100 px-2 text-rose-700"
+                      onClick={() => void share()}
+                      className="w-full rounded-xl bg-slate-900 px-4 py-3 font-semibold text-white"
                     >
-                      ✕
+                      Share video
                     </button>
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 text-xs">
-                  <label className="flex items-center gap-1">
-                    Start
-                    <input
-                      type="number"
-                      step={0.1}
-                      min={0}
-                      max={Math.max(0, s.end - 0.5)}
-                      value={s.start}
-                      onChange={(e) => patchSegment(s.id, { start: Math.max(0, Number(e.target.value)) })}
-                      className="w-16 rounded border border-slate-300 px-1 py-0.5"
-                    />
-                  </label>
-                  <label className="flex items-center gap-1">
-                    End
-                    <input
-                      type="number"
-                      step={0.1}
-                      min={s.start + 0.5}
-                      max={clips[s.clipIndex]?.duration}
-                      value={s.end}
-                      onChange={(e) =>
-                        patchSegment(s.id, { end: Math.min(clips[s.clipIndex]?.duration ?? Infinity, Number(e.target.value)) })
-                      }
-                      className="w-16 rounded border border-slate-300 px-1 py-0.5"
-                    />
-                  </label>
-                  <span className="text-slate-500">{fmtSec(s.end - s.start)}</span>
-                </div>
-                <div>
-                  <textarea
-                    rows={2}
-                    value={s.subtitle}
-                    maxLength={s.maxChars}
-                    aria-label={`Scene ${i + 1} caption`}
-                    onChange={(e) => patchSegment(s.id, { subtitle: e.target.value, editedByUser: true })}
-                    className="w-full resize-none rounded border border-slate-300 px-2 py-1 text-sm"
-                  />
-                  <div className={`text-right text-xs ${s.subtitle.length >= s.maxChars ? 'text-amber-700' : 'text-slate-400'}`}>
-                    {s.subtitle.length}/{s.maxChars}
-                  </div>
-                </div>
-              </li>
-            ))}
-          </ol>
-          {unusedClips.length > 0 && (
-            <div className="space-y-2 rounded-xl bg-white p-3 text-sm shadow-sm">
-              <div className="font-medium">Unused clips</div>
-              {unusedClips.map((i) => (
-                <div key={i} className="flex items-center justify-between text-xs">
-                  <span className="truncate">
-                    {i + 1}. {clips[i]?.file.name}
-                  </span>
-                  <button type="button" onClick={() => addUnused(i)} className="rounded bg-slate-900 px-2 py-1 text-white">
-                    Add
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-      )}
-
-      {step === 6 && (
-        <section aria-labelledby="s6" className="space-y-4">
-          <h2 id="s6" className="text-lg font-semibold">Render</h2>
-          <p className="text-sm text-slate-600">
-            Encodes a {style.quality} vertical video from your original clips. Rendering uses no AI, so you can redo it as often as you like.
-          </p>
-          {render.running ? (
-            <div className="space-y-3">
-              <ProgressBar
-                value={render.fraction}
-                label={`${Math.round(render.fraction * 100)}%${render.eta !== undefined ? ` · about ${Math.ceil(render.eta)}s left` : ''}`}
-              />
-              <button type="button" onClick={cancelJob} className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white">
-                Cancel
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => void runRender()}
-              disabled={overLimit || segments.length === 0}
-              className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
-            >
-              Start rendering
-            </button>
-          )}
-          {render.notice && <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900">{render.notice}</p>}
-          {render.error && (
-            <div role="alert" data-testid="render-error" className="space-y-2 rounded-lg bg-rose-50 p-3 text-sm text-rose-800">
-              <p>{render.error}</p>
-              {render.memory && <p className="text-xs">Try fewer or shorter scenes, or close other tabs and apps, then render again.</p>}
-            </div>
-          )}
-        </section>
-      )}
-
-      {step === 7 && (
-        <section aria-labelledby="s7" className="space-y-4">
-          <h2 id="s7" className="text-lg font-semibold">Share or download</h2>
-          {output ? (
-            <>
-              <video src={output.url} controls playsInline className="mx-auto max-h-[70vh] rounded-xl bg-black" />
-              <div className="text-xs text-slate-500">{fmtBytes(output.blob.size)}</div>
-              {canShare ? (
-                <button type="button" onClick={() => void share()} className="w-full rounded-xl bg-slate-900 px-4 py-3 font-semibold text-white">
-                  Share to Instagram
-                </button>
+                  ) : (
+                    <a
+                      href={output.url}
+                      download={fileName}
+                      className="block w-full rounded-xl bg-slate-900 px-4 py-3 text-center font-semibold text-white"
+                    >
+                      Download ({fileName})
+                    </a>
+                  )}
+                </>
               ) : (
-                <a
-                  href={output.url}
-                  download={fileName}
-                  className="block w-full rounded-xl bg-slate-900 px-4 py-3 text-center font-semibold text-white"
-                >
-                  Download ({fileName})
-                </a>
+                <p className="text-sm text-slate-600">Nothing has been rendered yet.</p>
               )}
-            </>
-          ) : (
-            <p className="text-sm text-slate-600">Nothing has been rendered yet.</p>
+              <button
+                type="button"
+                onClick={() => setStep(5)}
+                className="w-full rounded-xl bg-slate-200 px-4 py-3 text-sm font-semibold"
+              >
+                Back to editing
+              </button>
+            </section>
           )}
-          <button type="button" onClick={() => setStep(5)} className="w-full rounded-xl bg-slate-200 px-4 py-3 text-sm font-semibold">
-            Back to editing
-          </button>
-        </section>
-      )}
-
-      <footer className="mt-10 flex flex-wrap gap-4 text-xs text-slate-500">
-        <a href="/terms" className="underline">Terms</a>
-        <a href="/privacy" className="underline">Privacy</a>
-        <a href="/licenses" className="underline">Open-source licenses</a>
+        </div>
+        <aside className="editor-preview">
+          <div className="preview-heading">
+            <span className="eyebrow">YOUR REEL</span>
+            <span className="count-pill">9:16</span>
+          </div>
+          <div className="editor-preview-screen">
+            {output ? (
+              <video src={output.url} controls playsInline />
+            ) : clips[0]?.thumbnail ? (
+              <>
+                <img
+                  src={clips[0].thumbnail}
+                  alt="First clip preview"
+                  className={`look-${style.color}`}
+                />
+                <span className={`phone-caption caption-${style.subtitle}`}>
+                  {segments[0]?.subtitle || 'Your story goes here.'}
+                </span>
+              </>
+            ) : (
+              <div>
+                <span className="preview-frame">
+                  <Icon name="film" size={34} />
+                </span>
+                <strong>A story waiting to happen.</strong>
+                <p>
+                  Add your clips to see
+                  <br />
+                  your first moment here.
+                </p>
+              </div>
+            )}
+          </div>
+          <div className="preview-specs">
+            <span>
+              <Icon name="clock" size={14} />
+              {totalSeconds > 0 ? fmtSec(totalSeconds) : 'Up to 60s'}
+            </span>
+            <span>720p · MP4</span>
+          </div>
+          <div className="editor-session-note">
+            <Icon name="shield" size={16} />
+            <p>Your videos stay on your device. Keep this tab open to retain your edit.</p>
+          </div>
+        </aside>
+      </div>
+      <footer className="editor-legal-links">
+        <a href="/terms" className="underline">
+          Terms
+        </a>
+        <a href="/privacy" className="underline">
+          Privacy
+        </a>
+        <a href="/licenses" className="underline">
+          Open-source licenses
+        </a>
       </footer>
 
       {step < 7 && (
-        <div className="fixed inset-x-0 bottom-0 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur">
-          <div className="mx-auto flex max-w-xl gap-2">
+        <div className="editor-actionbar">
+          <div className="editor-actionbar-inner">
             <button
               type="button"
-              disabled={step === 1 || analysis.running || render.running}
+              disabled={step === 1 || analysis.running || render.running || ai.running || importing}
               onClick={() => setStep(step - 1)}
               className="rounded-lg bg-slate-200 px-4 py-2 text-sm font-semibold disabled:opacity-40"
             >
@@ -902,15 +1317,18 @@ export function EditorWizard() {
             </button>
             <button
               type="button"
-              disabled={nextDisabled || analysis.running || render.running || ai.running}
+              disabled={
+                nextDisabled || analysis.running || render.running || ai.running || importing
+              }
               onClick={() => goto(step + 1)}
               className="flex-1 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
             >
-              Next
+              {step === 6 ? 'View your reel' : `Continue to ${STEPS[step]?.toLowerCase()}`}{' '}
+              <Icon name="arrow" size={16} />
             </button>
           </div>
         </div>
       )}
-    </main>
+    </div>
   );
 }
