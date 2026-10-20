@@ -64,7 +64,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       menuButtonRef.current?.focus();
     };
   }, [mobile, menuOpen]);
-  const { user, signOut } = useAuth();
+  const { user, role: accountRole, signOut } = useAuth();
   const links = admin
     ? adminLinks.filter(
         (link) => role === 'admin' || !['/admin/settings', '/admin/audit'].includes(link.href),
@@ -153,10 +153,12 @@ export function AppShell({ children }: { children: ReactNode }) {
             >
               <Icon name="settings" /> Account settings
             </NavLink>
-            <NavLink href={admin ? '/projects' : '/admin'} onClick={() => setMenuOpen(false)}>
-              <Icon name={admin ? 'grid' : 'shield'} />
-              {admin ? 'Back to studio' : 'Console preview'}
-            </NavLink>
+            {(admin || accountRole === 'admin') && (
+              <NavLink href={admin ? '/projects' : '/admin'} onClick={() => setMenuOpen(false)}>
+                <Icon name={admin ? 'grid' : 'shield'} />
+                {admin ? 'Back to studio' : 'Console preview'}
+              </NavLink>
+            )}
           </nav>
           <div className="sidebar-profile">
             <span className="avatar">{(user?.displayName ?? 'Creator').slice(0, 1)}</span>

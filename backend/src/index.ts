@@ -8,6 +8,7 @@ import { createFirestoreProjectStore, createMemoryProjectStore } from './service
 import { attachRealtime, noopNotifier, type Notifier } from './services/realtime';
 import { createScriptService } from './services/script';
 import { createFirestoreUsageStore, createMemoryUsageStore } from './services/usage';
+import { createFirestoreUserStore, createMemoryUserStore } from './services/users';
 
 const env = loadEnv();
 const logger = pino({ level: 'info' });
@@ -26,6 +27,7 @@ const useMemory =
   (env.STORE === undefined && !process.env.FIRESTORE_EMULATOR_HOST && env.NODE_ENV !== 'production');
 const usage = useMemory ? createMemoryUsageStore() : createFirestoreUsageStore(projectId);
 const projects = useMemory ? createMemoryProjectStore() : createFirestoreProjectStore(projectId);
+const users = useMemory ? createMemoryUserStore() : createFirestoreUserStore(projectId);
 const verifier = createFirebaseVerifier(projectId);
 
 const script = createScriptService({
@@ -39,7 +41,7 @@ const script = createScriptService({
 let realtime: Notifier = noopNotifier;
 const notifier: Notifier = { notify: (uid, event, payload) => realtime.notify(uid, event, payload) };
 
-const app = createApp({ env, script, verifier, usage, projects, notifier, logger });
+const app = createApp({ env, script, verifier, usage, projects, users, notifier, logger });
 const server = createServer(app);
 realtime = attachRealtime(server, {
   verifier,

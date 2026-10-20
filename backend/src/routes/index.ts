@@ -1,7 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { Router, type Request } from 'express';
 import rateLimit from 'express-rate-limit';
-import { scriptRequestSchema, type GenerateScriptResponse, type ScriptRequest } from '@reelcraft/shared';
+import {
+  projectPatchSchema,
+  scriptRequestSchema,
+  stylePreferenceSchema,
+  type GenerateScriptResponse,
+  type ProjectPatch,
+  type ScriptRequest,
+  type StylePreference,
+} from '@reelcraft/shared';
 import { AppError } from '../lib/errors';
 import { validateBody } from '../middleware/validate';
 import { currentUser, requireAuth, type TokenVerifier } from '../services/auth';
@@ -9,12 +17,14 @@ import type { ProjectStore } from '../services/projects';
 import type { Notifier } from '../services/realtime';
 import type { ScriptService } from '../services/script';
 import { utcDay, type UsageLimits, type UsageStore } from '../services/usage';
+import type { UserStore } from '../services/users';
 
 export interface RouterDeps {
   script: ScriptService;
   verifier: TokenVerifier;
   usage: UsageStore;
   projects: ProjectStore;
+  users: UserStore;
   notifier: Notifier;
   limits: UsageLimits;
   /** Salt for hashing client IPs; the raw IP is never stored. Needed only for the per-IP cap. */
@@ -43,6 +53,68 @@ export function createApiRouter(deps: RouterDeps): Router {
   router.get('/me/usage', auth, async (_req, res, next) => {
     try {
       res.json(await deps.usage.get(currentUser(res).uid, utcDay(), deps.limits));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Called once right after sign-in: creates the profile on first login and returns the saved style.
+  router.post('/me/session', auth, async (_req, res, next) => {
+    try {
+      const { uid, email } = currentUser(res);
+      res.json(await deps.users.touch(uid, email));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.put('/me/style', auth, validateBody(stylePreferenceSchema), async (req, res, next) => {
+    try {
+      await deps.users.setStyle(currentUser(res).uid, (req.body as StylePreference).style);
+      res.status(204).end();
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.get('/projects', auth, async (_req, res, next) => {
+    try {
+      res.json({ projects: await deps.projects.listByUser(currentUser(res).uid) });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Someone else's project answers 404, not 403, so ids cannot be probed.
+  const ownProject = async (id: string, uid: string) => {
+    const project = await deps.projects.get(id);
+    if (!project || project.uid !== uid) throw new AppError(404, 'NOT_FOUND', 'Project not found.');
+    return project;
+  };
+
+  router.get('/projects/:id', auth, async (req, res, next) => {
+    try {
+      res.json({ id: req.params.id, ...(await ownProject(req.params.id!, currentUser(res).uid)) });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.patch('/projects/:id', auth, validateBody(projectPatchSchema), async (req, res, next) => {
+    try {
+      await ownProject(req.params.id!, currentUser(res).uid);
+      await deps.projects.update(req.params.id!, req.body as ProjectPatch);
+      res.status(204).end();
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.delete('/projects/:id', auth, async (req, res, next) => {
+    try {
+      await ownProject(req.params.id!, currentUser(res).uid);
+      await deps.projects.remove(req.params.id!);
+      res.status(204).end();
     } catch (err) {
       next(err);
     }
@@ -86,6 +158,7 @@ export function createApiRouter(deps: RouterDeps): Router {
       const projectId = randomUUID();
       await deps.projects.create(projectId, {
         uid,
+        title: result.script.title,
         userPrompt: input.userPrompt,
         userMemos: input.userMemos,
         scenes: input.scenes,
