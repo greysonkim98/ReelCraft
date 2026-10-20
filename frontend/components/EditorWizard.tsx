@@ -149,6 +149,7 @@ export function EditorWizard() {
   const [ai, setAi] = useState<{
     running: boolean;
     error?: string;
+    needsVerification?: boolean;
     done?: boolean;
     fallback?: boolean;
     model?: string | null;
@@ -391,6 +392,7 @@ export function EditorWizard() {
       }
       setAi({
         running: false,
+        needsVerification: e.code === 'NETWORK_VERIFICATION_REQUIRED',
         error:
           e.code === 'UNAUTHENTICATED'
             ? 'Your session expired. Go back to the home page and sign in again.'
@@ -987,6 +989,19 @@ export function EditorWizard() {
               {ai.error && (
                 <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">
                   {ai.error}
+                  {ai.needsVerification && (
+                    <>
+                      {' '}
+                      <a
+                        className="underline"
+                        href="/verify"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Verify network in a new tab
+                      </a>
+                    </>
+                  )}
                 </p>
               )}
               {ai.done && !ai.fallback && (

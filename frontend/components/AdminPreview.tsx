@@ -171,7 +171,6 @@ const titles = {
     'Sample activity, service capacity, and the people behind the stories.',
   ],
   users: ['People & permissions', 'Review sample accounts and explore the support workflow.'],
-  ips: ['Network activity', 'A closer look at sample usage patterns across networks.'],
   settings: [
     'Room to create. Limits to protect.',
     'Preview the runtime controls that keep the service available.',
@@ -234,8 +233,6 @@ export function AdminPreview({ view }: { view: keyof typeof titles }) {
         <AdminOverview />
       ) : view === 'users' ? (
         <AdminUsers />
-      ) : view === 'ips' ? (
-        <AdminIps />
       ) : view === 'settings' ? (
         <AdminSettings />
       ) : (
@@ -616,173 +613,6 @@ function AdminUsers() {
               ? 'Support can apply suspensions for up to 7 days. Role changes and deletion require admin.'
               : 'Changes apply to the preview session only.'}
           </p>
-        </Dialog>
-      )}
-    </>
-  );
-}
-const sampleIps = [
-  {
-    hash: 'ip_demo_a81f',
-    country: 'United States',
-    network: 'Residential network',
-    accounts: 2,
-    requests: 4,
-    flagged: false,
-  },
-  {
-    hash: 'ip_demo_b72c',
-    country: 'United Kingdom',
-    network: 'Datacenter network',
-    accounts: 6,
-    requests: 18,
-    flagged: true,
-  },
-  {
-    hash: 'ip_demo_c93e',
-    country: 'Canada',
-    network: 'Residential network',
-    accounts: 1,
-    requests: 1,
-    flagged: false,
-  },
-];
-function AdminIps() {
-  const { role, blocked, setBlocked, record } = useAdminPreview();
-  const [query, setQuery] = useState('');
-  const [target, setTarget] = useState<string | null>(null);
-  const [days, setDays] = useState(1);
-  const [reason, setReason] = useState('');
-  return (
-    <>
-      <div className="table-toolbar">
-        <label className="search-field">
-          <Icon name="search" size={17} />
-          <input
-            aria-label="Search network activity"
-            placeholder="Search country or IP hash…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        </label>
-        <span className="muted">Hashed identifiers only</span>
-      </div>
-      <div className="table-container">
-        <table>
-          <thead>
-            <tr>
-              <th>IP hash / country</th>
-              <th>Network type</th>
-              <th>Accounts</th>
-              <th>Requests</th>
-              <th>Status</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sampleIps
-              .filter((ip) =>
-                `${ip.hash} ${ip.country}`.toLowerCase().includes(query.toLowerCase()),
-              )
-              .map((ip) => (
-                <tr key={ip.hash}>
-                  <td>
-                    <strong>{ip.hash}</strong>
-                    <small>{ip.country}</small>
-                  </td>
-                  <td>{ip.network}</td>
-                  <td>{ip.accounts}</td>
-                  <td>{ip.requests}</td>
-                  <td>
-                    <span
-                      className={`status-pill ${ip.flagged || blocked.includes(ip.hash) ? 'draft' : 'ready'}`}
-                    >
-                      {blocked.includes(ip.hash)
-                        ? 'Restricted'
-                        : ip.flagged
-                          ? 'Review suggested'
-                          : 'Normal'}
-                    </span>
-                  </td>
-                  <td>
-                    <button
-                      className="text-link"
-                      disabled={role !== 'admin'}
-                      onClick={() => {
-                        if (blocked.includes(ip.hash)) {
-                          setBlocked(blocked.filter((hash) => hash !== ip.hash));
-                          record('IP restriction lifted', ip.hash, 'Preview action');
-                        } else {
-                          setTarget(ip.hash);
-                          setReason('');
-                          setDays(1);
-                        }
-                      }}
-                    >
-                      {blocked.includes(ip.hash) ? 'Lift restriction' : 'Restrict'}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-          </tbody>
-        </table>
-        {!sampleIps.some((ip) =>
-          `${ip.hash} ${ip.country}`.toLowerCase().includes(query.toLowerCase()),
-        ) && (
-          <div className="empty-state">
-            <h3>No matching networks</h3>
-            <p>Try a different country or hash.</p>
-          </div>
-        )}
-      </div>
-      <div className="preview-note">
-        <Icon name="globe" />
-        <p>
-          Sample country and network data. The planned IPinfo integration will enrich hashed IP
-          activity. Support can inspect activity; only admins can restrict a network.
-        </p>
-      </div>
-      {target && (
-        <Dialog title="Restrict sample network" onClose={() => setTarget(null)}>
-          <p>{target}</p>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (role !== 'admin' || !reason.trim() || days < 1 || days > 30) return;
-              setBlocked([...blocked, target]);
-              record('IP restricted', target, `${days} day(s): ${reason.trim()}`);
-              setTarget(null);
-            }}
-          >
-            <label className="field">
-              Duration in days
-              <input
-                type="number"
-                min={1}
-                max={30}
-                required
-                value={days}
-                onChange={(e) => setDays(Number(e.target.value))}
-              />
-            </label>
-            <label className="field">
-              Reason
-              <textarea
-                required
-                maxLength={200}
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-              />
-            </label>
-            <div className="dialog-actions">
-              <button type="button" className="button secondary" onClick={() => setTarget(null)}>
-                Cancel
-              </button>
-              <button className="button danger" disabled={!reason.trim()}>
-                Apply preview restriction
-              </button>
-            </div>
-          </form>
         </Dialog>
       )}
     </>

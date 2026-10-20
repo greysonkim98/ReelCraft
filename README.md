@@ -2,7 +2,7 @@
 
 A web app that turns several phone videos into a vertical reel of up to 60 seconds (720×1280, 9:16 MP4) with AI-generated captions.
 
-**Your videos never leave the browser.** Analysis, trimming, caption burn-in, and encoding all run in the browser with ffmpeg.wasm. The server only handles sign-in verification, usage limits, and the AI caption call. The UI is in English.
+**Your videos never leave the browser.** Analysis, trimming, caption burn-in, and encoding all run in the browser with ffmpeg.wasm. The server handles sign-in verification, usage limits, network abuse checks, and the AI caption call. The UI is in English.
 
 > **Current status:** sign-in (Firebase) → clips → style → analysis → AI captions (Groq) → review → render → share all work.
 > **Not built yet:** SigLIP 2 scene tagging, Kokoro voice-over (TTS), per-step local saving, and the full failure-handling matrix.
@@ -26,6 +26,7 @@ More documentation:
 - Running and checking locally: [docs/local-testing.md](docs/local-testing.md)
 - Deployment, cost principles, and to-do list: [docs/launch-checklist.md](docs/launch-checklist.md)
 - Component audit results: [docs/component-audit.md](docs/component-audit.md)
+- IPinfo Lite setup, network verification, and admin access: [docs/ipinfo.md](docs/ipinfo.md)
 
 ## Project structure
 
@@ -39,12 +40,14 @@ firebase.json, firestore.rules, render.yaml
 
 ## Server API
 
-| Route | Description |
-| --- | --- |
-| `GET /api/v1/health` | Health check (no sign-in required) |
-| `GET /api/v1/me/usage` | AI caption uses left today |
-| `POST /api/v1/ai/script` | scenes.json → script JSON. Requires sign-in. Limited to 3 calls per account per day and 60 per day overall |
-| Socket.IO `project:progress` | Sends progress to the same account's other devices. Closes automatically after 2 minutes of inactivity or 15 minutes total |
+| Route                                  | Description                                                                                                                |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/v1/health`                   | Health check (no sign-in required)                                                                                         |
+| `GET /api/v1/me/usage`                 | AI caption uses left today                                                                                                 |
+| `POST /api/v1/ai/script`               | scenes.json → script JSON. Requires sign-in. Limited to 3 calls per account per day and 60 per day overall                 |
+| `GET /api/v1/admin/ips`                | Paginated daily network activity with IPinfo country/ASN. Requires a support/admin role in Firestore                       |
+| `POST /api/v1/me/network-verification` | Verify the signed-in account's current network with a single-use Firebase App Check token                                  |
+| Socket.IO `project:progress`           | Sends progress to the same account's other devices. Closes automatically after 2 minutes of inactivity or 15 minutes total |
 
 ## ffmpeg.wasm notes (measured, not assumed)
 

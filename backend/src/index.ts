@@ -8,6 +8,8 @@ import { createFirestoreProjectStore, createMemoryProjectStore } from './service
 import { attachRealtime, noopNotifier, type Notifier } from './services/realtime';
 import { createScriptService } from './services/script';
 import { createFirestoreUsageStore, createMemoryUsageStore } from './services/usage';
+import { createFirestoreNetworkStore, createMemoryNetworkStore } from './services/networks';
+import { createNetworkVerifier } from './services/networkVerification';
 
 const env = loadEnv();
 const logger = pino({ level: 'info' });
@@ -17,15 +19,22 @@ if (!env.FIREBASE_PROJECT_ID) {
   process.exit(1);
 }
 const projectId = env.FIREBASE_PROJECT_ID;
-if (env.FIREBASE_SERVICE_ACCOUNT_JSON) configureFirebase(parseServiceAccount(env.FIREBASE_SERVICE_ACCOUNT_JSON));
+if (env.FIREBASE_SERVICE_ACCOUNT_JSON)
+  configureFirebase(parseServiceAccount(env.FIREBASE_SERVICE_ACCOUNT_JSON));
 
 // Firestore needs real credentials or its emulator. Without either (a plain local run), keep the
 // counters in memory; production forbids this in loadEnv().
 const useMemory =
   env.STORE === 'memory' ||
-  (env.STORE === undefined && !process.env.FIRESTORE_EMULATOR_HOST && env.NODE_ENV !== 'production');
+  (env.STORE === undefined &&
+    !process.env.FIRESTORE_EMULATOR_HOST &&
+    env.NODE_ENV !== 'production');
 const usage = useMemory ? createMemoryUsageStore() : createFirestoreUsageStore(projectId);
 const projects = useMemory ? createMemoryProjectStore() : createFirestoreProjectStore(projectId);
+const networks = useMemory ? createMemoryNetworkStore() : createFirestoreNetworkStore(projectId);
+const networkVerifier = env.FIREBASE_WEB_APP_ID
+  ? createNetworkVerifier(projectId, env.FIREBASE_WEB_APP_ID)
+  : undefined;
 const verifier = createFirebaseVerifier(projectId);
 
 const script = createScriptService({
@@ -37,9 +46,21 @@ const script = createScriptService({
 // Socket.IO attaches to the HTTP server that wraps the app, so the app gets a notifier that
 // forwards to the real one once it exists.
 let realtime: Notifier = noopNotifier;
-const notifier: Notifier = { notify: (uid, event, payload) => realtime.notify(uid, event, payload) };
+const notifier: Notifier = {
+  notify: (uid, event, payload) => realtime.notify(uid, event, payload),
+};
 
-const app = createApp({ env, script, verifier, usage, projects, notifier, logger });
+const app = createApp({
+  env,
+  script,
+  verifier,
+  usage,
+  projects,
+  notifier,
+  logger,
+  networks,
+  networkVerifier,
+});
 const server = createServer(app);
 realtime = attachRealtime(server, {
   verifier,
@@ -49,10 +70,15 @@ realtime = attachRealtime(server, {
 });
 
 server.listen(env.PORT, () => {
-  logger.info(`ReelCraft backend listening on :${env.PORT} (${env.NODE_ENV}, store=${useMemory ? 'memory' : 'firestore'})`);
+  logger.info(
+    `ReelCraft backend listening on :${env.PORT} (${env.NODE_ENV}, store=${useMemory ? 'memory' : 'firestore'})`,
+  );
   if (!useMemory && !env.FIREBASE_SERVICE_ACCOUNT_JSON && !process.env.FIRESTORE_EMULATOR_HOST) {
     logger.warn('No FIREBASE_SERVICE_ACCOUNT_JSON: relying on Google Cloud default credentials.');
   }
-  if (useMemory) logger.warn('Usage counters and projects are kept in memory and reset on restart.');
-  if (!env.GROQ_API_KEY) logger.warn('GROQ_API_KEY is not set: /ai/script will answer 500 CONFIG_MISSING.');
+  if (useMemory)
+    logger.warn('Usage counters and projects are kept in memory and reset on restart.');
+  if (!env.GROQ_API_KEY)
+    logger.warn('GROQ_API_KEY is not set: /ai/script will answer 500 CONFIG_MISSING.');
+  if (!env.IPINFO_TOKEN) logger.warn('IPINFO_TOKEN is not set: network enrichment is disabled.');
 });

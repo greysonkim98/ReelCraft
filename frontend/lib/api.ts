@@ -1,4 +1,10 @@
-import type { ApiErrorBody, GenerateScriptResponse, ScriptRequestInput, UsageInfo } from '@reelcraft/shared';
+import type {
+  ApiErrorBody,
+  GenerateScriptResponse,
+  ScriptRequestInput,
+  UsageInfo,
+  NetworkActivityResponse,
+} from '@reelcraft/shared';
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
@@ -27,11 +33,20 @@ async function request<T>(path: string, init: RequestInit & { token?: string } =
       },
     });
   } catch {
-    throw new ApiError('Cannot reach the server. Check your connection and try again.', 0, 'NETWORK');
+    throw new ApiError(
+      'Cannot reach the server. Check your connection and try again.',
+      0,
+      'NETWORK',
+    );
   }
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as ApiErrorBody | null;
-    throw new ApiError(body?.error ?? `Request failed (${res.status})`, res.status, body?.code ?? 'UNKNOWN', body?.details);
+    throw new ApiError(
+      body?.error ?? `Request failed (${res.status})`,
+      res.status,
+      body?.code ?? 'UNKNOWN',
+      body?.details,
+    );
   }
   return (await res.json()) as T;
 }
@@ -40,6 +55,23 @@ export const getHealth = () => request<{ ok: boolean; time: string }>('/health')
 
 export const getUsage = (token: string) => request<UsageInfo>('/me/usage', { token });
 
+export const getNetworkActivity = (token: string, day: string, cursor?: string) => {
+  const params = new URLSearchParams({ day });
+  if (cursor) params.set('cursor', cursor);
+  return request<NetworkActivityResponse>(`/admin/ips?${params}`, { token, cache: 'no-store' });
+};
+
+export const verifyNetwork = (token: string, appCheckToken: string) =>
+  request<{ expiresAt: string }>('/me/network-verification', {
+    method: 'POST',
+    token,
+    headers: { 'X-Firebase-AppCheck': appCheckToken },
+  });
+
 /** scenes.json in, script JSON out. Costs one of the account's daily AI uses. */
 export const generateScript = (token: string, body: ScriptRequestInput) =>
-  request<GenerateScriptResponse>('/ai/script', { method: 'POST', token, body: JSON.stringify(body) });
+  request<GenerateScriptResponse>('/ai/script', {
+    method: 'POST',
+    token,
+    body: JSON.stringify(body),
+  });

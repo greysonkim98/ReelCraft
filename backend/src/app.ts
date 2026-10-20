@@ -12,6 +12,9 @@ import type { ProjectStore } from './services/projects';
 import { noopNotifier, type Notifier } from './services/realtime';
 import type { ScriptService } from './services/script';
 import type { UsageStore } from './services/usage';
+import { createIpInfoService, type IpInfoService } from './services/ipinfo';
+import { createMemoryNetworkStore, type NetworkStore } from './services/networks';
+import type { NetworkVerifier } from './services/networkVerification';
 
 export interface AppDeps {
   env: Env;
@@ -21,11 +24,26 @@ export interface AppDeps {
   projects: ProjectStore;
   notifier?: Notifier;
   logger?: Logger;
+  ipinfo?: IpInfoService;
+  networks?: NetworkStore;
+  networkVerifier?: NetworkVerifier;
 }
 
-export function createApp({ env, script, verifier, usage, projects, notifier, logger }: AppDeps): Express {
+export function createApp({
+  env,
+  script,
+  verifier,
+  usage,
+  projects,
+  notifier,
+  logger,
+  ipinfo,
+  networks,
+  networkVerifier,
+}: AppDeps): Express {
   const log = logger ?? pino({ level: env.NODE_ENV === 'test' ? 'silent' : 'info' });
   const app = express();
+  const networkStore = networks ?? createMemoryNetworkStore();
 
   app.set('trust proxy', env.TRUST_PROXY_HOPS);
   app.use(helmet());
@@ -70,8 +88,22 @@ export function createApp({ env, script, verifier, usage, projects, notifier, lo
       usage,
       projects,
       notifier: notifier ?? noopNotifier,
-      limits: { perUser: env.AI_PER_USER_PER_DAY, global: env.GLOBAL_DAILY_AI_CAP, perIp: env.IP_DAILY_CAP },
+      limits: {
+        perUser: env.AI_PER_USER_PER_DAY,
+        global: env.GLOBAL_DAILY_AI_CAP,
+        perIp: env.IP_DAILY_CAP,
+      },
       ipHashSalt: env.IP_HASH_SALT,
+      ipinfo:
+        ipinfo ??
+        createIpInfoService({
+          token: env.IPINFO_TOKEN,
+          salt: env.IP_HASH_SALT,
+          cache: networkStore.cache,
+        }),
+      networks: networkStore,
+      flaggedAsns: env.IPINFO_FLAGGED_ASNS,
+      networkVerifier,
     }),
   );
 

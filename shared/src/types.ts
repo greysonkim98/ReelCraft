@@ -81,6 +81,30 @@ export interface UsageInfo {
   resetAt: string;
 }
 
+/** IPinfo Lite fields only; no raw IP, city, VPN or datacenter classification. */
+export interface NetworkInfo {
+  country: string | null;
+  countryCode: string | null;
+  asn: string | null;
+  asName: string | null;
+  asDomain: string | null;
+}
+
+export interface NetworkActivity extends NetworkInfo {
+  ipHash: string;
+  day: string;
+  requests: number;
+  accountCount: number;
+  flagged: boolean;
+  lookupStatus: 'ok' | 'unavailable' | 'private' | 'disabled';
+}
+
+export interface NetworkActivityResponse {
+  items: NetworkActivity[];
+  nextCursor: string | null;
+  day: string;
+}
+
 export interface GenerateScriptResponse {
   projectId: string;
   script: import('./schemas').Script;

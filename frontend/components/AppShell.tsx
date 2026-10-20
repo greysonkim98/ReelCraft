@@ -105,7 +105,13 @@ export function AppShell({ children }: { children: ReactNode }) {
           <span className="workspace-avatar">{admin ? 'RC' : 'YS'}</span>
           <div>
             <strong>{admin ? 'ReelCraft console' : 'Your studio'}</strong>
-            <span>{admin ? 'Administration preview' : 'A little footage. A great story.'}</span>
+            <span>
+              {path === '/admin/ips'
+                ? 'Network activity'
+                : admin
+                  ? 'Administration preview'
+                  : 'A little footage. A great story.'}
+            </span>
           </div>
         </div>
         <a href="/editor" className="button primary sidebar-create">
@@ -199,7 +205,12 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
           <div className="topbar-right">
             <span className="local-badge">
-              <span /> {admin ? 'Sample data' : 'Made on your device'}
+              <span />{' '}
+              {path === '/admin/ips'
+                ? 'Protected activity'
+                : admin
+                  ? 'Sample data'
+                  : 'Made on your device'}
             </span>
             <a href="/help" className="icon-button" aria-label="Help">
               <Icon name="help" size={19} />

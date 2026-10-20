@@ -1,8 +1,17 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { Router, type Request } from 'express';
 import rateLimit from 'express-rate-limit';
-import { scriptRequestSchema, type GenerateScriptResponse, type ScriptRequest } from '@reelcraft/shared';
+import {
+  scriptRequestSchema,
+  type GenerateScriptResponse,
+  type ScriptRequest,
+  type NetworkActivity,
+} from '@reelcraft/shared';
+import { z } from 'zod';
 import { AppError } from '../lib/errors';
+import { hashIp, normalizeIp } from '../lib/ip';
+import { checkNetwork, type NetworkDeps } from '../middleware/network';
+import type { NetworkVerifier } from '../services/networkVerification';
 import { validateBody } from '../middleware/validate';
 import { currentUser, requireAuth, type TokenVerifier } from '../services/auth';
 import type { ProjectStore } from '../services/projects';
@@ -10,15 +19,16 @@ import type { Notifier } from '../services/realtime';
 import type { ScriptService } from '../services/script';
 import { utcDay, type UsageLimits, type UsageStore } from '../services/usage';
 
-export interface RouterDeps {
+export interface RouterDeps extends NetworkDeps {
   script: ScriptService;
   verifier: TokenVerifier;
   usage: UsageStore;
   projects: ProjectStore;
   notifier: Notifier;
   limits: UsageLimits;
-  /** Salt for hashing client IPs; the raw IP is never stored. Needed only for the per-IP cap. */
+  /** Shared salt for IPinfo activity, network verification, and the optional per-IP cap. */
   ipHashSalt?: string;
+  networkVerifier?: NetworkVerifier;
 }
 
 const DAILY_LIMIT_MESSAGES = {
@@ -31,10 +41,10 @@ export function createApiRouter(deps: RouterDeps): Router {
   const router = Router();
   const auth = requireAuth(deps.verifier);
 
-  const ipHash = (req: Request): string | undefined =>
-    deps.limits.perIp > 0 && deps.ipHashSalt && req.ip
-      ? createHash('sha256').update(`${deps.ipHashSalt}|${req.ip}`).digest('hex').slice(0, 32)
-      : undefined;
+  const ipHash = (req: Request): string | undefined => {
+    const ip = normalizeIp(req.ip);
+    return deps.ipHashSalt && ip ? hashIp(ip, deps.ipHashSalt) : undefined;
+  };
 
   router.get('/health', (_req, res) => {
     res.json({ ok: true, time: new Date().toISOString() });
@@ -49,78 +59,161 @@ export function createApiRouter(deps: RouterDeps): Router {
   });
 
   // A burst guard on top of the daily cap: a script takes seconds, so a few per minute is plenty.
-  const scriptBurst = rateLimit({
-    windowMs: 60_000,
-    limit: 5,
-    standardHeaders: true,
-    legacyHeaders: false,
-    keyGenerator: (_req, res) => (res as { locals: { user?: { uid: string } } }).locals.user?.uid ?? 'anon',
-    handler: (_req, res) => {
-      res.status(429).json({ error: 'Too many requests.', code: 'RATE_LIMITED' });
-    },
-  });
+  const accountBurst = () =>
+    rateLimit({
+      windowMs: 60_000,
+      limit: 5,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (_req, res) =>
+        (res as { locals: { user?: { uid: string } } }).locals.user?.uid ?? 'anon',
+      handler: (_req, res) => {
+        res.status(429).json({ error: 'Too many requests.', code: 'RATE_LIMITED' });
+      },
+    });
+  const scriptBurst = accountBurst();
 
-  router.post('/ai/script', auth, scriptBurst, validateBody(scriptRequestSchema), async (req, res, next) => {
-    const { uid } = currentUser(res);
-    const input = req.body as ScriptRequest;
-    const day = utcDay();
-    const hash = ipHash(req);
-    let consumed = false;
+  router.get('/admin/ips', auth, async (req, res, next) => {
     try {
-      const spend = await deps.usage.consume(uid, day, deps.limits, hash);
-      if (!spend.ok) {
-        throw new AppError(429, 'DAILY_LIMIT', DAILY_LIMIT_MESSAGES[spend.reason], {
-          reason: spend.reason,
-          usage: spend.usage,
-        });
+      if (!(await deps.networks.canRead(currentUser(res).uid))) {
+        throw new AppError(
+          403,
+          'FORBIDDEN',
+          'Network activity is available to support and admins only.',
+        );
       }
-      consumed = true;
-
-      const result = await deps.script.generateScript(input);
-      // No Groq answer at all means nothing was spent upstream: give the use back.
-      if (result.calls === 0) {
-        await deps.usage.refund(uid, day, hash);
-        consumed = false;
+      const query = z
+        .object({
+          day: z
+            .string()
+            .regex(/^\d{4}-\d{2}-\d{2}$/)
+            .refine((day) => {
+              const date = new Date(`${day}T00:00:00Z`);
+              return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === day;
+            })
+            .default(utcDay()),
+          limit: z.coerce.number().int().min(1).max(100).default(50),
+          cursor: z
+            .string()
+            .regex(/^[a-f0-9]{32}_\d{4}-\d{2}-\d{2}$/)
+            .optional(),
+        })
+        .safeParse(req.query);
+      if (
+        !query.success ||
+        (query.data.cursor && !query.data.cursor.endsWith(`_${query.data.day}`))
+      ) {
+        throw new AppError(
+          400,
+          'VALIDATION_ERROR',
+          'Use a valid UTC day, page limit (1-100), and cursor.',
+        );
       }
-
-      const projectId = randomUUID();
-      await deps.projects.create(projectId, {
-        uid,
-        userPrompt: input.userPrompt,
-        userMemos: input.userMemos,
-        scenes: input.scenes,
-        script: result.script,
-        source: result.source,
-        model: result.model,
-        stage: 'script_ready',
-        percent: 100,
-      });
-      await deps.usage.logAi({
-        uid,
-        projectId,
-        model: result.model,
-        source: result.source,
-        calls: result.calls,
-        scenes: input.scenes.length,
-      });
-
-      const usage = await deps.usage.get(uid, day, deps.limits);
-      const body: GenerateScriptResponse = {
-        projectId,
-        script: result.script,
-        source: result.source,
-        model: result.model,
-        usage,
-      };
-      deps.notifier.notify(uid, 'script:ready', { projectId });
-      res.json(body);
+      const { day, limit, cursor } = query.data;
+      res.set('Cache-Control', 'no-store');
+      res.json(await deps.networks.list(day, limit, cursor));
     } catch (err) {
-      if (consumed && !(err instanceof AppError && err.code === 'DAILY_LIMIT')) {
-        await deps.usage.refund(uid, day, hash).catch(() => undefined);
-      }
       next(err);
     }
   });
+
+  router.post('/me/network-verification', auth, accountBurst(), async (req, res, next) => {
+    try {
+      if (!deps.networkVerifier)
+        throw new AppError(
+          503,
+          'VERIFICATION_UNAVAILABLE',
+          'Network verification is not configured. Contact support.',
+        );
+      const hash = ipHash(req);
+      const token = req.header('X-Firebase-AppCheck');
+      if (!hash || !token || token.length > 8192 || !(await deps.networkVerifier.verify(token))) {
+        throw new AppError(
+          403,
+          'VERIFICATION_FAILED',
+          'Verification failed or expired. Please try again.',
+        );
+      }
+      const expiresAt = Date.now() + 10 * 60 * 1000;
+      await deps.networks.markVerified(currentUser(res).uid, hash, expiresAt);
+      res.set('Cache-Control', 'no-store');
+      res.json({ expiresAt: new Date(expiresAt).toISOString() });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post(
+    '/ai/script',
+    auth,
+    scriptBurst,
+    validateBody(scriptRequestSchema),
+    checkNetwork(deps),
+    async (req, res, next) => {
+      const { uid } = currentUser(res);
+      const input = req.body as ScriptRequest;
+      const day = utcDay();
+      const hash = deps.limits.perIp > 0 ? ipHash(req) : undefined;
+      let consumed = false;
+      try {
+        const spend = await deps.usage.consume(uid, day, deps.limits, hash);
+        if (!spend.ok) {
+          throw new AppError(429, 'DAILY_LIMIT', DAILY_LIMIT_MESSAGES[spend.reason], {
+            reason: spend.reason,
+            usage: spend.usage,
+          });
+        }
+        consumed = true;
+
+        const result = await deps.script.generateScript(input);
+        // No Groq answer at all means nothing was spent upstream: give the use back.
+        if (result.calls === 0) {
+          await deps.usage.refund(uid, day, hash);
+          consumed = false;
+        }
+
+        const projectId = randomUUID();
+        await deps.projects.create(projectId, {
+          uid,
+          userPrompt: input.userPrompt,
+          userMemos: input.userMemos,
+          scenes: input.scenes,
+          script: result.script,
+          source: result.source,
+          model: result.model,
+          stage: 'script_ready',
+          percent: 100,
+        });
+        await deps.usage.logAi({
+          uid,
+          projectId,
+          model: result.model,
+          source: result.source,
+          calls: result.calls,
+          scenes: input.scenes.length,
+          ...(res.locals.network
+            ? { network: res.locals.network as Omit<NetworkActivity, 'requests' | 'accountCount'> }
+            : {}),
+        });
+
+        const usage = await deps.usage.get(uid, day, deps.limits);
+        const body: GenerateScriptResponse = {
+          projectId,
+          script: result.script,
+          source: result.source,
+          model: result.model,
+          usage,
+        };
+        deps.notifier.notify(uid, 'script:ready', { projectId });
+        res.json(body);
+      } catch (err) {
+        if (consumed && !(err instanceof AppError && err.code === 'DAILY_LIMIT')) {
+          await deps.usage.refund(uid, day, hash).catch(() => undefined);
+        }
+        next(err);
+      }
+    },
+  );
 
   return router;
 }

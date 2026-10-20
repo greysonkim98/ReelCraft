@@ -1,4 +1,4 @@
-import type { UsageInfo } from '@reelcraft/shared';
+import type { UsageInfo, NetworkActivity } from '@reelcraft/shared';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import { getFirebaseApp } from '../lib/firebase';
 
@@ -20,6 +20,7 @@ export interface AiLogEntry {
   source: 'llm' | 'fallback';
   calls: number;
   scenes: number;
+  network?: Omit<NetworkActivity, 'requests' | 'accountCount'>;
 }
 
 /**
@@ -63,7 +64,8 @@ export function createMemoryUsageStore(): UsageStore & { logs: AiLogEntry[] } {
       const usage = info(read(k.user), limits.perUser);
       if (read(k.user) >= limits.perUser) return { ok: false, reason: 'user', usage };
       if (read(k.global) >= limits.global) return { ok: false, reason: 'global', usage };
-      if (k.ip && limits.perIp > 0 && read(k.ip) >= limits.perIp) return { ok: false, reason: 'ip', usage };
+      if (k.ip && limits.perIp > 0 && read(k.ip) >= limits.perIp)
+        return { ok: false, reason: 'ip', usage };
       counters.set(k.user, read(k.user) + 1);
       counters.set(k.global, read(k.global) + 1);
       if (k.ip) counters.set(k.ip, read(k.ip) + 1);
@@ -93,7 +95,11 @@ export function createFirestoreUsageStore(projectId: string): UsageStore {
       const globalRef = ref(`global_${day}`);
       const ipRef = ipHash && limits.perIp > 0 ? ref(`ip_${ipHash}_${day}`) : null;
       return db().runTransaction(async (tx) => {
-        const [u, g, i] = await Promise.all([tx.get(userRef), tx.get(globalRef), ipRef ? tx.get(ipRef) : null]);
+        const [u, g, i] = await Promise.all([
+          tx.get(userRef),
+          tx.get(globalRef),
+          ipRef ? tx.get(ipRef) : null,
+        ]);
         const used = (u.data()?.count as number | undefined) ?? 0;
         const usage = info(used, limits.perUser);
         if (used >= limits.perUser) return { ok: false, reason: 'user', usage } as const;
@@ -103,7 +109,11 @@ export function createFirestoreUsageStore(projectId: string): UsageStore {
         if (ipRef && ((i?.data()?.count as number | undefined) ?? 0) >= limits.perIp) {
           return { ok: false, reason: 'ip', usage } as const;
         }
-        const bump = { count: FieldValue.increment(1), day, updatedAt: FieldValue.serverTimestamp() };
+        const bump = {
+          count: FieldValue.increment(1),
+          day,
+          updatedAt: FieldValue.serverTimestamp(),
+        };
         tx.set(userRef, { ...bump, uid }, { merge: true });
         tx.set(globalRef, bump, { merge: true });
         if (ipRef) tx.set(ipRef, bump, { merge: true });
@@ -123,7 +133,9 @@ export function createFirestoreUsageStore(projectId: string): UsageStore {
       return info((snap.data()?.count as number | undefined) ?? 0, limits.perUser);
     },
     async logAi(entry) {
-      await db().collection('aiUsage').add({ ...entry, createdAt: FieldValue.serverTimestamp() });
+      await db()
+        .collection('aiUsage')
+        .add({ ...entry, createdAt: FieldValue.serverTimestamp() });
     },
   };
 }
