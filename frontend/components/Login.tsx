@@ -5,10 +5,12 @@ import { useAuth } from '@/lib/auth';
 import { Brand } from './ui/Brand';
 import { Icon } from './ui/Icon';
 export function Login() {
-  const { user, loading, error, configured, signIn, devSignIn } = useAuth();
+  const { user, role, loading, error, configured, signIn, devSignIn } = useAuth();
+  // Wait for the role: leaving the page earlier cancels the profile request that is still in flight.
+  // Admins (set by hand in the console) go to the management console, everyone else to their projects.
   useEffect(() => {
-    if (user) window.location.replace('/projects');
-  }, [user]);
+    if (user && role) window.location.replace(role === 'admin' ? '/admin' : '/projects');
+  }, [user, role]);
   return (
     <main className="login-page">
       <section className="login-form-side">

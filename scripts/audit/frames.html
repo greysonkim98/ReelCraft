@@ -1,0 +1,56 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>frame extraction audit</title>
+<script type="module">
+  import { FFmpeg } from '/ffmpeg-esm/index.js';
+
+  let ffInst = null;
+  async function load(multi) {
+    if (ffInst) {
+      try { ffInst.terminate(); } catch {}
+      ffInst = null;
+    }
+    const ff = new FFmpeg();
+    const dir = `${location.origin}/ffmpeg/${multi ? 'mt' : 'st'}`;
+    await ff.load({
+      classWorkerURL: `${location.origin}/ffmpeg/lib/worker.js`,
+      coreURL: `${dir}/ffmpeg-core.js`,
+      wasmURL: `${dir}/ffmpeg-core.wasm`,
+      ...(multi ? { workerURL: `${dir}/ffmpeg-core.worker.js` } : {}),
+    });
+    ffInst = ff;
+    return ff;
+  }
+
+  // Extract 1 frame per second as `ext` (png|jpg). `vf` is the scale part, e.g. "scale=-2:384".
+  // Findings: JPEG output of 682x384 / 688x384 crashes the ST core (memory access out of bounds); PNG and 224x224 JPEG work.
+  // Thread caps mirror frontend/lib/ffmpeg/threads.ts.
+  window.extract = async (name, multi, vf, ext) => {
+    const t0load = performance.now();
+    const ff = await load(multi);
+    const loadMs = Math.round(performance.now() - t0load);
+    const buf = new Uint8Array(await (await fetch('/vid/' + name)).arrayBuffer());
+    await ff.writeFile('in_' + name, buf);
+    const log = [];
+    ff.on('log', ({ message }) => log.push(message));
+    const t0 = performance.now();
+    let code = null, err = null;
+    try {
+      code = await ff.exec(
+        ['-threads', '1', '-i', 'in_' + name, '-filter_threads', '1', '-filter_complex_threads', '1', '-vf', `fps=1,${vf}`, ...(ext === 'jpg' ? ['-q:v', '3'] : []), '-threads', '2', `f_%04d.${ext}`],
+        300000,
+      );
+    } catch (e) {
+      err = String(e);
+    }
+    const ms = Math.round(performance.now() - t0);
+    const files = (await ff.listDir('/')).filter((f) => /^f_\d+\.(jpg|png)$/.test(f.name));
+    let bytes = 0;
+    for (const f of files) bytes += (await ff.readFile(f.name)).length;
+    const mem = performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null;
+    for (const f of files) await ff.deleteFile(f.name);
+    await ff.deleteFile('in_' + name);
+    return { name, multi, vf, ext, code, err, ms, loadMs, frames: files.length, bytes, jsHeapMB: mem, errLog: log.filter((l) => /error|fail/i.test(l)).slice(0, 5) };
+  };
+  window.ready = true;
+</script>

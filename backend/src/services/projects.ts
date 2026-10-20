@@ -1,9 +1,11 @@
-import type { ProgressStage, Scene, Script } from '@reelcraft/shared';
+import type { ProgressStage, ProjectPatch, Scene, Script, Style } from '@reelcraft/shared';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import { getFirebaseApp } from '../lib/firebase';
 
 export interface ProjectRecord {
   uid: string;
+  title?: string;
+  style?: Style;
   userPrompt: string;
   userMemos: string[];
   scenes: Scene[];
@@ -22,6 +24,10 @@ export interface ProjectStore {
   create(id: string, record: ProjectRecord): Promise<void>;
   get(id: string): Promise<ProjectRecord | null>;
   setStage(id: string, stage: ProgressStage, percent: number, message?: string): Promise<void>;
+  /** Newest first, one user's projects only. */
+  listByUser(uid: string, limit?: number): Promise<(ProjectRecord & { id: string })[]>;
+  update(id: string, patch: ProjectPatch): Promise<void>;
+  remove(id: string): Promise<void>;
 }
 
 export function createMemoryProjectStore(): ProjectStore & { all: Map<string, ProjectRecord> } {
@@ -37,6 +43,20 @@ export function createMemoryProjectStore(): ProjectStore & { all: Map<string, Pr
     async setStage(id, stage, percent) {
       const rec = all.get(id);
       if (rec) all.set(id, { ...rec, stage, percent });
+    },
+    async listByUser(uid, limit = 50) {
+      return [...all.entries()]
+        .filter(([, r]) => r.uid === uid)
+        .reverse()
+        .slice(0, limit)
+        .map(([id, r]) => ({ id, ...r }));
+    },
+    async update(id, patch) {
+      const rec = all.get(id);
+      if (rec) all.set(id, { ...rec, ...patch });
+    },
+    async remove(id) {
+      all.delete(id);
     },
   };
 }
@@ -55,6 +75,16 @@ export function createFirestoreProjectStore(projectId: string): ProjectStore {
       await col()
         .doc(id)
         .set({ stage, percent, ...(message ? { message } : {}), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    },
+    async listByUser(uid, limit = 50) {
+      const snap = await col().where('uid', '==', uid).orderBy('updatedAt', 'desc').limit(limit).get();
+      return snap.docs.map((d) => ({ id: d.id, ...(d.data() as ProjectRecord) }));
+    },
+    async update(id, patch) {
+      await col().doc(id).set({ ...patch, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    },
+    async remove(id) {
+      await col().doc(id).delete();
     },
   };
 }

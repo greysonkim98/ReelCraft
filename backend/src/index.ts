@@ -10,6 +10,7 @@ import { createScriptService } from './services/script';
 import { createFirestoreUsageStore, createMemoryUsageStore } from './services/usage';
 import { createFirestoreNetworkStore, createMemoryNetworkStore } from './services/networks';
 import { createNetworkVerifier } from './services/networkVerification';
+import { createFirestoreUserStore, createMemoryUserStore } from './services/users';
 
 const env = loadEnv();
 const logger = pino({ level: 'info' });
@@ -35,6 +36,7 @@ const networks = useMemory ? createMemoryNetworkStore() : createFirestoreNetwork
 const networkVerifier = env.FIREBASE_WEB_APP_ID
   ? createNetworkVerifier(projectId, env.FIREBASE_WEB_APP_ID)
   : undefined;
+const users = useMemory ? createMemoryUserStore() : createFirestoreUserStore(projectId);
 const verifier = createFirebaseVerifier(projectId);
 
 const script = createScriptService({
@@ -56,6 +58,7 @@ const app = createApp({
   verifier,
   usage,
   projects,
+  users,
   notifier,
   logger,
   networks,

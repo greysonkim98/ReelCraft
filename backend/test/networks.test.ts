@@ -76,7 +76,10 @@ afterEach(() => vi.restoreAllMocks());
 
 describe('network integration', () => {
   it('records real country/ASN per AI request, distinct accounts, and enriched AI logs', async () => {
-    const { post, networks, usage, fetchFn } = setup();
+    const { app, post, networks, usage, fetchFn } = setup();
+    const session = await request(app).post('/api/v1/me/session').set(auth());
+    expect(session.status).toBe(200);
+    expect(session.body.role).toBe('user');
     await post();
     await post();
     await post('bob');
@@ -92,6 +95,12 @@ describe('network integration', () => {
     expect(usage.logs[0]!.network?.ipHash).toBe(rows.items[0]!.ipHash);
     expect(JSON.stringify(rows)).not.toContain('8.8.8.8');
     expect(fetchFn).toHaveBeenCalledTimes(1);
+    // The merged CRUD route must expose the same project created by the enriched AI workflow.
+    const project = await request(app)
+      .get(`/api/v1/projects/${usage.logs[0]!.projectId}`)
+      .set(auth());
+    expect(project.status).toBe(200);
+    expect(project.body).toMatchObject({ uid: 'alice', title: 'Test' });
   });
 
   it('does not spend provider requests or write stats before authentication and validation', async () => {

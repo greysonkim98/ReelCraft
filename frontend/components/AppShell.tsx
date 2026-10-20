@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useAuth } from '@/lib/auth';
 import { Brand } from './ui/Brand';
 import { Icon, type IconName } from './ui/Icon';
-import { usePreviewRole } from './AdminPreview';
+import { canAccessAdminPage } from '@/lib/admin-access';
 const creatorLinks: { href: string; label: string; icon: IconName }[] = [
   { href: '/projects', label: 'My projects', icon: 'grid' },
   { href: '/styles', label: 'Style library', icon: 'sliders' },
@@ -23,7 +23,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   const admin = path.startsWith('/admin');
   const editor = path.startsWith('/editor');
   const NavLink = editor ? 'a' : Link;
-  const role = usePreviewRole();
   const [menuOpen, setMenuOpen] = useState(false);
   const [mobile, setMobile] = useState(false);
   const sidebarRef = useRef<HTMLElement>(null);
@@ -64,11 +63,9 @@ export function AppShell({ children }: { children: ReactNode }) {
       menuButtonRef.current?.focus();
     };
   }, [mobile, menuOpen]);
-  const { user, signOut } = useAuth();
+  const { user, role: accountRole, signOut } = useAuth();
   const links = admin
-    ? adminLinks.filter(
-        (link) => role === 'admin' || !['/admin/settings', '/admin/audit'].includes(link.href),
-      )
+    ? adminLinks.filter((link) => canAccessAdminPage(accountRole, link.href))
     : creatorLinks;
   const active = (href: string) => (href === '/admin' ? path === href : path.startsWith(href));
   return (
@@ -159,10 +156,12 @@ export function AppShell({ children }: { children: ReactNode }) {
             >
               <Icon name="settings" /> Account settings
             </NavLink>
-            <NavLink href={admin ? '/projects' : '/admin'} onClick={() => setMenuOpen(false)}>
-              <Icon name={admin ? 'grid' : 'shield'} />
-              {admin ? 'Back to studio' : 'Console preview'}
-            </NavLink>
+            {(admin || canAccessAdminPage(accountRole, '/admin')) && (
+              <NavLink href={admin ? '/projects' : '/admin'} onClick={() => setMenuOpen(false)}>
+                <Icon name={admin ? 'grid' : 'shield'} />
+                {admin ? 'Back to studio' : 'Console preview'}
+              </NavLink>
+            )}
           </nav>
           <div className="sidebar-profile">
             <span className="avatar">{(user?.displayName ?? 'Creator').slice(0, 1)}</span>

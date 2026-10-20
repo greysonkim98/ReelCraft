@@ -1,0 +1,32 @@
+'use client';
+import { useEffect, type ReactNode } from 'react';
+import { usePathname } from 'next/navigation';
+import { useAuth } from '@/lib/auth';
+import { canAccessAdminPage } from '@/lib/admin-access';
+
+/**
+ * Support can inspect users and network activity; settings and audit remain admin-only.
+ * This UI guard never replaces the API's independent role check.
+ */
+export function AdminGuard({ children }: { children: ReactNode }) {
+  const { user, role, loading } = useAuth();
+  const path = usePathname();
+  const allowed = !!user && canAccessAdminPage(role, path);
+
+  useEffect(() => {
+    if (loading) return;
+    if (!user) window.location.replace('/login');
+    else if (role && !allowed)
+      window.location.replace(role === 'support' ? '/admin/ips' : '/projects');
+  }, [loading, user, role, allowed]);
+
+  if (!allowed)
+    return (
+      <div className="empty-state">
+        <span className="loading-ring" />
+        <h2>Checking your access…</h2>
+        <p>Checking your account permissions for this page.</p>
+      </div>
+    );
+  return <>{children}</>;
+}

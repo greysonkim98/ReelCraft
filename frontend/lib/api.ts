@@ -4,6 +4,8 @@ import type {
   ScriptRequestInput,
   UsageInfo,
   NetworkActivityResponse,
+  Role,
+  Style,
 } from '@reelcraft/shared';
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
@@ -75,3 +77,7 @@ export const generateScript = (token: string, body: ScriptRequestInput) =>
     token,
     body: JSON.stringify(body),
   });
+
+/** Creates the profile on first sign-in (users/{uid}) and returns the saved role and style. */
+export const startSession = (token: string) =>
+  request<{ email?: string; role?: Role; style?: Style }>('/me/session', { method: 'POST', token });
