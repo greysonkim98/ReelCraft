@@ -4,17 +4,25 @@ services:
   - type: web
     name: reelcraft-api
     runtime: node
+    branch: DanielPrice
     plan: free
     region: oregon
     buildCommand: npm ci && npm run build -w shared && npm run build -w backend
     startCommand: node backend/dist/index.js
     healthCheckPath: /api/v1/health
-    autoDeploy: false
+    autoDeployTrigger: off
     envVars:
       - key: NODE_ENV
         value: production
+      - key: STORE
+        value: firestore
       - key: FIREBASE_PROJECT_ID
         value: reelcraft-4a7a7
+      - key: FIREBASE_WEB_APP_ID
+        value: 1:410338139407:web:207463f6f388cf7c94327a
+      # Enable only after verifying App Check on the deployed /verify page.
+      - key: IPINFO_FLAGGED_ASNS
+        value: ''
       # Firebase Hosting origins that may call the API, comma separated
       - key: CLIENT_ORIGIN
         value: https://reelcraft-4a7a7.web.app,https://reelcraft-4a7a7.firebaseapp.com
@@ -39,4 +47,3 @@ services:
         sync: false
       - key: IP_HASH_SALT
         generateValue: true
-      # Add FIREBASE_WEB_APP_ID and IPINFO_FLAGGED_ASNS when App Check is configured.

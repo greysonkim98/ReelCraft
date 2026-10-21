@@ -14,14 +14,32 @@ export function NetworkVerification() {
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const siteKey = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY;
+  // This variable belongs only in .env.development.local; production excludes this branch.
+  const debugToken =
+    process.env.NODE_ENV === 'development' &&
+    typeof window !== 'undefined' &&
+    ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname)
+      ? process.env.NEXT_PUBLIC_APPCHECK_DEBUG_TOKEN
+      : undefined;
   async function verify() {
     setBusy(true);
     setError(null);
     try {
-      const { initializeAppCheck, ReCaptchaV3Provider, getLimitedUseToken } =
+      const { initializeAppCheck, ReCaptchaV3Provider, CustomProvider, getLimitedUseToken } =
         await import('firebase/app-check');
+      if (debugToken) {
+        (
+          self as typeof self & { FIREBASE_APPCHECK_DEBUG_TOKEN?: string }
+        ).FIREBASE_APPCHECK_DEBUG_TOKEN = debugToken;
+      }
       appCheck ??= initializeAppCheck(getAuthClient('session').app, {
-        provider: new ReCaptchaV3Provider(siteKey!),
+        provider: debugToken
+          ? new CustomProvider({
+              getToken: async () => {
+                throw new Error('Local debug provider is inactive.');
+              },
+            })
+          : new ReCaptchaV3Provider(siteKey!),
         isTokenAutoRefreshEnabled: false,
       });
       const attestation = await getLimitedUseToken(appCheck);
@@ -55,7 +73,7 @@ export function NetworkVerification() {
             Complete this security check, then return to the editor. Keep your editor tab open so
             your clips stay available.
           </p>
-          {!siteKey ? (
+          {!siteKey && !debugToken ? (
             <p role="alert">Network verification is not configured yet. Please contact support.</p>
           ) : (
             <button className="button primary" disabled={busy} onClick={() => void verify()}>
@@ -65,11 +83,13 @@ export function NetworkVerification() {
           {error && <p role="alert">{error}</p>}
         </>
       )}
-      <p className="fine-print">
-        Protected by reCAPTCHA. Google&apos;s{' '}
-        <a href="https://policies.google.com/privacy">Privacy Policy</a> and{' '}
-        <a href="https://policies.google.com/terms">Terms of Service</a> apply.
-      </p>
+      {!debugToken && (
+        <p className="fine-print">
+          Protected by reCAPTCHA. Google&apos;s{' '}
+          <a href="https://policies.google.com/privacy">Privacy Policy</a> and{' '}
+          <a href="https://policies.google.com/terms">Terms of Service</a> apply.
+        </p>
+      )}
     </main>
   );
 }

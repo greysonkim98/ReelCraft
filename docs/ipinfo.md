@@ -12,6 +12,24 @@ The proposal's IPinfo work is connected to `POST /api/v1/ai/script`, the existin
 
 Requests use `https://api.ipinfo.io/lite/<client-ip>` with an Authorization bearer token. IPv4 and IPv6 are normalized, including IPv4-mapped IPv6. Loopback, private, documentation and reserved addresses are not sent to IPinfo. Localhost will therefore show local/private with unknown country/ASN, which is expected.
 
+### Local Firestore credentials
+
+For local development, run `gcloud.cmd auth login --update-adc` with an account that can access project `reelcraft-4a7a7`. This also creates Application Default Credentials for the backend Admin SDK. Confirm access with `gcloud.cmd firestore databases describe --database="(default)" --project=reelcraft-4a7a7`, then set `STORE=firestore` in the root `.env` and restart the backend. Keep `TRUST_PROXY_HOPS=0` for direct local requests. Do not upload your personal Google credentials to Render; production uses its own service account via `FIREBASE_SERVICE_ACCOUNT_JSON`.
+
+### Local App Check verification
+
+Use Firebase's [App Check debug provider](https://firebase.google.com/docs/app-check/web/debug-provider) for localhost. Register a private debug token for the existing Firebase web app and save it as `NEXT_PUBLIC_APPCHECK_DEBUG_TOKEN` in **`frontend/.env.development.local`** (gitignored). Restart `npm run dev:frontend`. The verification page enables this token only in development on `localhost`, `127.0.0.1`, or `[::1]`; production builds still require the reCAPTCHA site key. Keep the debug token private and revoke it in Firebase App Check when it is no longer needed. Do not add localhost to the production reCAPTCHA domain list.
+
+The project's Firebase App Check API must be enabled. For local Google credentials, run `gcloud.cmd auth application-default set-quota-project reelcraft-4a7a7`. A project IAM administrator must grant the signed-in development account `roles/firebaseappcheck.tokenVerifier` so the backend can consume limited-use tokens. Firestore access alone does not grant this permission. No additional broad administrator role is needed.
+
+Once configured, sign in locally and visit `http://localhost:3000/verify`. A successful verification lasts 10 minutes for that account/IP pair. Local loopback addresses have no public ASN, so leave the watchlist empty for normal local development; test ASN enforcement separately with the automated network middleware tests or later through the deployed frontend.
+
+### Deployment configuration
+
+`render.yaml` targets `DanielPrice`, requires Firestore, and sets the existing Firebase web app ID. Supply the backend secrets in Render and retain the generated `IP_HASH_SALT` across deployments. The ASN watchlist starts empty; enable it after the verification flow works.
+
+Before exporting the frontend, set `NEXT_PUBLIC_API_URL` to the actual deployed backend URL and `NEXT_PUBLIC_RECAPTCHA_SITE_KEY` to the registered public site key. Run `npm run export -w @reelcraft/frontend`, then deploy `frontend/out` with Firebase Hosting. These public values are compiled into the frontend, so changing them requires a new export and deployment. Register `reelcraft-4a7a7.web.app` and `reelcraft-4a7a7.firebaseapp.com` with the reCAPTCHA site. The reCAPTCHA secret belongs in the Firebase App Check provider configuration, never in frontend environment variables.
+
 ## Cache, records and failures
 
 - `ipInfoCache/{ipHash}` contains allowlisted country/ASN metadata and an `expiresAt` millisecond timestamp. Entries are reusable for 24 hours, then overwritten by the next successful lookup. Expiry is checked in application code; no paid TTL deletion service is required.
