@@ -16,6 +16,7 @@ import { createIpInfoService, type IpInfoService } from './services/ipinfo';
 import { createMemoryNetworkStore, type NetworkStore } from './services/networks';
 import type { NetworkVerifier } from './services/networkVerification';
 import { createMemoryUserStore, type UserStore } from './services/users';
+import { createAdminStore, createMemoryAdminStorage, type AdminStore } from './services/admin';
 
 export interface AppDeps {
   env: Env;
@@ -29,6 +30,7 @@ export interface AppDeps {
   ipinfo?: IpInfoService;
   networks?: NetworkStore;
   networkVerifier?: NetworkVerifier;
+  admin?: AdminStore;
 }
 
 export function createApp({
@@ -43,10 +45,28 @@ export function createApp({
   ipinfo,
   networks,
   networkVerifier,
+  admin,
 }: AppDeps): Express {
   const log = logger ?? pino({ level: env.NODE_ENV === 'test' ? 'silent' : 'info' });
   const app = express();
   const networkStore = networks ?? createMemoryNetworkStore();
+  const userStore = users ?? createMemoryUserStore();
+  const adminStore =
+    admin ??
+    createAdminStore(
+      createMemoryAdminStorage(
+        'all' in userStore
+          ? (userStore.all as Map<string, import('./services/users').UserRecord>)
+          : undefined,
+      ),
+      {
+        aiPerUserPerDay: env.AI_PER_USER_PER_DAY,
+        globalDailyAiCap: env.GLOBAL_DAILY_AI_CAP,
+        ipDailyCap: env.IP_DAILY_CAP,
+        maxClips: 10,
+        maxOutputSeconds: 60,
+      },
+    );
 
   app.set('trust proxy', env.TRUST_PROXY_HOPS);
   app.use(helmet());
@@ -90,7 +110,8 @@ export function createApp({
       verifier,
       usage,
       projects,
-      users: users ?? createMemoryUserStore(),
+      users: userStore,
+      admin: adminStore,
       notifier: notifier ?? noopNotifier,
       limits: {
         perUser: env.AI_PER_USER_PER_DAY,

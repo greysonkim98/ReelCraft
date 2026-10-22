@@ -52,13 +52,13 @@ To enable step-up:
 
 A flagged request returns `403 NETWORK_VERIFICATION_REQUIRED` before AI quota is spent. The editor shows a link opening `/verify` in a new tab. This page is outside the editor's cross-origin isolation, allowing reCAPTCHA resources to load while the original tab retains the selected video files. It sends a fresh limited-use token to `POST /api/v1/me/network-verification` in `X-Firebase-AppCheck`. The backend checks the app ID, consumes the token to prevent replay, and grants the current account/network pair a 10-minute verification in `networkVerifications`. The user returns to the editor and retries. Verification does not bypass daily usage limits and does not transfer to another account or IP.
 
-Signed device cookies, multi-account suspicion rules, account suspension management and IP restriction controls from the broader proposal remain separate features. This change implements the IPinfo ASN step-up path.
+Signed device cookies and automatic multi-account suspicion rules remain separate features. Account suspensions and manual IP restrictions are implemented by the [management console](admin-management.md), alongside the IPinfo ASN verification flow.
 
 ## Admin IP view
 
-Open `/admin/ips`. It now displays real records, including loading, empty, error and access-denied states and IPinfo attribution. Other admin screens still use their existing preview data.
+Open `/admin/ips`. It displays real records, including loading, empty, error and access-denied states and IPinfo attribution. Its management dialog lists accounts seen on a network and lets admins apply or lift temporary AI request blocks. These actions are audited. See [Admin management](admin-management.md) for roles, runtime controls, and all management endpoints.
 
-`GET /api/v1/admin/ips?day=2026-10-20&limit=50&cursor=...` requires a Firebase ID token and a server-owned `users/{uid}.role` of `support` or `admin`. Missing roles default to no access; deleted or currently suspended users cannot read the records. An operator can provision a role in the Firebase console for an existing Firebase Auth UID. The preview role selector never grants API access. Local memory-store roles are empty unless injected by a test; use Firestore or its emulator for a live admin session.
+`GET /api/v1/admin/ips?day=2026-10-20&limit=50&cursor=...` requires a Firebase ID token and a server-owned `users/{uid}.role` of `support` or `admin`. Missing roles default to no access; deleted or currently suspended users cannot read the records. An existing admin can assign roles through Users & access; the first admin can be provisioned in the Firebase console for an existing Firebase Auth UID. Use Firestore or its emulator for a live admin session.
 
 Responses contain `{ day, items, nextCursor }`, no raw IPs and no account UID lists. Dates are UTC; page size is 1–100, default 50. Use the returned cursor with the same day. Pages sort by hash for stable cursor pagination. No custom composite index is needed for the day filter plus document-ID order.
 

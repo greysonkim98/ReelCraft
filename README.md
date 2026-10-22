@@ -19,6 +19,10 @@ npm run dev:backend         # API on http://localhost:4000
 npm run dev:frontend        # app on http://localhost:3000
 ```
 
+Run the backend and frontend commands in separate terminals. With the existing local configuration, sign-in uses real Firebase; do not start the Auth emulator. Leave `NEXT_PUBLIC_AUTH_EMULATOR` in `frontend/.env.local` empty and backend emulator variables unset. The frontend's `NEXT_PUBLIC_API_URL` should be `http://localhost:4000`.
+
+Open `http://localhost:3000/login`. If port 3000 is already in use, reuse or stop the existing frontend before starting another. The optional Firebase Emulator UI uses port **4002**, keeping port **4000** reserved for the API. A working API returns JSON at `http://localhost:4000/api/v1/health`; an HTML page there means another service is using its port.
+
 Other scripts: `npm run build`, `npm test`, `npm run typecheck`, `npm run lint`, `npm run format`, `npm run verify:render`.
 
 More documentation:
@@ -27,6 +31,7 @@ More documentation:
 - Deployment, cost principles, and to-do list: [docs/launch-checklist.md](docs/launch-checklist.md)
 - Component audit results: [docs/component-audit.md](docs/component-audit.md)
 - IPinfo Lite setup, network verification, and admin access: [docs/ipinfo.md](docs/ipinfo.md)
+- Live user management, runtime controls, network blocks, and audit history: [docs/admin-management.md](docs/admin-management.md)
 
 ## Project structure
 

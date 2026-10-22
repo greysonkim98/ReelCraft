@@ -4,6 +4,8 @@ import { Server } from 'socket.io';
 import type { Logger } from 'pino';
 import type { ProjectStore } from './projects';
 import { type AuthUser, type TokenVerifier } from './auth';
+import { assertActiveUser, type UserStore } from './users';
+import { AppError } from '../lib/errors';
 
 export interface Notifier {
   /** Push an event to every connected device of one user. */
@@ -15,6 +17,7 @@ export const noopNotifier: Notifier = { notify() {} };
 export interface RealtimeDeps {
   verifier: TokenVerifier;
   projects: ProjectStore;
+  users?: UserStore;
   origins: string[];
   logger: Logger;
   /** Disconnect a socket that sent no progress event for this long. */
@@ -46,7 +49,10 @@ const MAX_EVENTS_PER_SECOND = 10;
  * socket is closed after a short idle time and after a hard maximum lifetime, and the number of
  * simultaneous sockets is capped. Clients connect only while a job runs and reconnect on demand.
  */
-export function attachRealtime(httpServer: HttpServer, deps: RealtimeDeps): Notifier & { io: Server } {
+export function attachRealtime(
+  httpServer: HttpServer,
+  deps: RealtimeDeps,
+): Notifier & { io: Server } {
   const io = new Server(httpServer, {
     cors: { origin: deps.origins, credentials: true },
     maxHttpBufferSize: 10_000,
@@ -62,6 +68,7 @@ export function attachRealtime(httpServer: HttpServer, deps: RealtimeDeps): Noti
     if (typeof token !== 'string' || token === '') return next(new Error('UNAUTHENTICATED'));
     try {
       socket.data.user = await deps.verifier.verify(token);
+      if (deps.users) assertActiveUser(await deps.users.get((socket.data.user as AuthUser).uid));
       next();
     } catch {
       next(new Error('UNAUTHENTICATED'));
@@ -90,32 +97,45 @@ export function attachRealtime(httpServer: HttpServer, deps: RealtimeDeps): Noti
       clearTimeout(maxTimer);
     });
 
-    socket.on('project:progress', async (payload: unknown, ack?: (res: { ok: boolean; code?: string }) => void) => {
-      touch();
-      const now = Date.now();
-      if (now - windowStart >= 1000) {
-        windowStart = now;
-        eventsInWindow = 0;
-      }
-      if (++eventsInWindow > MAX_EVENTS_PER_SECOND) return ack?.({ ok: false, code: 'RATE_LIMITED' });
-
-      const parsed = progressEventSchema.safeParse(payload);
-      if (!parsed.success) return ack?.({ ok: false, code: 'VALIDATION_ERROR' });
-      const ev = parsed.data;
-      try {
-        const project = await deps.projects.get(ev.projectId);
-        if (!project || project.uid !== user.uid) return ack?.({ ok: false, code: 'NOT_FOUND' });
-        if (lastStage.get(ev.projectId) !== ev.stage) {
-          lastStage.set(ev.projectId, ev.stage);
-          await deps.projects.setStage(ev.projectId, ev.stage, ev.percent, ev.message);
+    socket.on(
+      'project:progress',
+      async (payload: unknown, ack?: (res: { ok: boolean; code?: string }) => void) => {
+        touch();
+        const now = Date.now();
+        if (now - windowStart >= 1000) {
+          windowStart = now;
+          eventsInWindow = 0;
         }
-        socket.to(room(user.uid)).emit('project:progress', ev);
-        ack?.({ ok: true });
-      } catch (err) {
-        deps.logger.error({ err }, 'progress event failed');
-        ack?.({ ok: false, code: 'INTERNAL' });
-      }
-    });
+        if (++eventsInWindow > MAX_EVENTS_PER_SECOND)
+          return ack?.({ ok: false, code: 'RATE_LIMITED' });
+
+        const parsed = progressEventSchema.safeParse(payload);
+        if (!parsed.success) return ack?.({ ok: false, code: 'VALIDATION_ERROR' });
+        const ev = parsed.data;
+        try {
+          if (deps.users) assertActiveUser(await deps.users.get(user.uid));
+          const project = await deps.projects.get(ev.projectId);
+          if (!project || project.uid !== user.uid) return ack?.({ ok: false, code: 'NOT_FOUND' });
+          if (lastStage.get(ev.projectId) !== ev.stage) {
+            lastStage.set(ev.projectId, ev.stage);
+            await deps.projects.setStage(ev.projectId, ev.stage, ev.percent, ev.message);
+          }
+          socket.to(room(user.uid)).emit('project:progress', ev);
+          ack?.({ ok: true });
+        } catch (err) {
+          if (
+            err instanceof AppError &&
+            ['ACCOUNT_SUSPENDED', 'ACCOUNT_DELETED'].includes(err.code)
+          ) {
+            ack?.({ ok: false, code: err.code });
+            socket.disconnect(true);
+            return;
+          }
+          deps.logger.error({ err }, 'progress event failed');
+          ack?.({ ok: false, code: 'INTERNAL' });
+        }
+      },
+    );
   });
 
   return {

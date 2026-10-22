@@ -1,5 +1,5 @@
-import { AdminPreview } from '@/components/AdminPreview';
+import { AdminConsole } from '@/components/AdminConsole';
 export const metadata = { title: 'Runtime limits · ReelCraft' };
 export default function Page() {
-  return <AdminPreview view="settings" />;
+  return <AdminConsole view="settings" />;
 }

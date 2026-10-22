@@ -97,6 +97,8 @@ export interface NetworkActivity extends NetworkInfo {
   accountCount: number;
   flagged: boolean;
   lookupStatus: 'ok' | 'unavailable' | 'private' | 'disabled';
+  /** Added by the admin API from the current restriction, not historical activity. */
+  blockedUntil?: number;
 }
 
 export interface NetworkActivityResponse {

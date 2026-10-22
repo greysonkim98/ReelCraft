@@ -23,6 +23,8 @@ import type { Notifier } from '../services/realtime';
 import type { ScriptService } from '../services/script';
 import { utcDay, type UsageLimits, type UsageStore } from '../services/usage';
 import type { UserStore } from '../services/users';
+import type { AdminStore } from '../services/admin';
+import { createAdminRouter } from './admin';
 
 export interface RouterDeps extends NetworkDeps {
   script: ScriptService;
@@ -35,6 +37,7 @@ export interface RouterDeps extends NetworkDeps {
   /** Shared salt for IPinfo activity, network verification, and the optional per-IP cap. */
   ipHashSalt?: string;
   networkVerifier?: NetworkVerifier;
+  admin: AdminStore;
 }
 
 const DAILY_LIMIT_MESSAGES = {
@@ -45,7 +48,23 @@ const DAILY_LIMIT_MESSAGES = {
 
 export function createApiRouter(deps: RouterDeps): Router {
   const router = Router();
-  const auth = requireAuth(deps.verifier);
+  const auth = requireAuth(deps.verifier, deps.users);
+  const liveLimits = async () => {
+    const { limits } = await deps.admin.getSettings();
+    return {
+      perUser: limits.aiPerUserPerDay,
+      global: limits.globalDailyAiCap,
+      perIp: limits.ipDailyCap,
+    };
+  };
+  router.get('/config', auth, async (_req, res, next) => {
+    try {
+      res.set('Cache-Control', 'no-store');
+      res.json(await deps.admin.getSettings());
+    } catch (error) {
+      next(error);
+    }
+  });
 
   const ipHash = (req: Request): string | undefined => {
     const ip = normalizeIp(req.ip);
@@ -58,7 +77,7 @@ export function createApiRouter(deps: RouterDeps): Router {
 
   router.get('/me/usage', auth, async (_req, res, next) => {
     try {
-      res.json(await deps.usage.get(currentUser(res).uid, utcDay(), deps.limits));
+      res.json(await deps.usage.get(currentUser(res).uid, utcDay(), await liveLimits()));
     } catch (err) {
       next(err);
     }
@@ -143,13 +162,7 @@ export function createApiRouter(deps: RouterDeps): Router {
 
   router.get('/admin/ips', auth, async (req, res, next) => {
     try {
-      if (!(await deps.networks.canRead(currentUser(res).uid))) {
-        throw new AppError(
-          403,
-          'FORBIDDEN',
-          'Network activity is available to support and admins only.',
-        );
-      }
+      await deps.admin.authorize(currentUser(res).uid);
       const query = z
         .object({
           day: z
@@ -179,7 +192,16 @@ export function createApiRouter(deps: RouterDeps): Router {
       }
       const { day, limit, cursor } = query.data;
       res.set('Cache-Control', 'no-store');
-      res.json(await deps.networks.list(day, limit, cursor));
+      const page = await deps.networks.list(day, limit, cursor);
+      res.json({
+        ...page,
+        items: await Promise.all(
+          page.items.map(async (item) => ({
+            ...item,
+            blockedUntil: (await deps.admin.restriction(item.ipHash))?.expiresAt ?? 0,
+          })),
+        ),
+      });
     } catch (err) {
       next(err);
     }
@@ -216,15 +238,31 @@ export function createApiRouter(deps: RouterDeps): Router {
     auth,
     scriptBurst,
     validateBody(scriptRequestSchema),
-    checkNetwork(deps),
+    checkNetwork({ ...deps, restriction: (hash) => deps.admin.restriction(hash) }),
     async (req, res, next) => {
       const { uid } = currentUser(res);
       const input = req.body as ScriptRequest;
       const day = utcDay();
-      const hash = deps.limits.perIp > 0 ? ipHash(req) : undefined;
+      let hash: string | undefined;
       let consumed = false;
       try {
-        const spend = await deps.usage.consume(uid, day, deps.limits, hash);
+        const { limits: runtime } = await deps.admin.getSettings();
+        if (
+          input.scenes.reduce((sum, scene) => sum + scene.end - scene.start, 0) >
+          runtime.maxOutputSeconds + 0.001
+        )
+          throw new AppError(
+            400,
+            'RUNTIME_LIMIT',
+            `Selected scenes exceed the current ${runtime.maxOutputSeconds}-second reel limit.`,
+          );
+        const limits = {
+          perUser: runtime.aiPerUserPerDay,
+          global: runtime.globalDailyAiCap,
+          perIp: runtime.ipDailyCap,
+        };
+        hash = limits.perIp > 0 ? ipHash(req) : undefined;
+        const spend = await deps.usage.consume(uid, day, limits, hash);
         if (!spend.ok) {
           throw new AppError(429, 'DAILY_LIMIT', DAILY_LIMIT_MESSAGES[spend.reason], {
             reason: spend.reason,
@@ -265,7 +303,7 @@ export function createApiRouter(deps: RouterDeps): Router {
             : {}),
         });
 
-        const usage = await deps.usage.get(uid, day, deps.limits);
+        const usage = await deps.usage.get(uid, day, limits);
         const body: GenerateScriptResponse = {
           projectId,
           script: result.script,
@@ -284,5 +322,6 @@ export function createApiRouter(deps: RouterDeps): Router {
     },
   );
 
+  router.use('/admin', createAdminRouter(deps.admin, deps.usage, auth, !!deps.ipHashSalt));
   return router;
 }

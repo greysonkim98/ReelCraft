@@ -10,14 +10,31 @@ export interface NetworkDeps {
   ipinfo: IpInfoService;
   networks: NetworkStore;
   flaggedAsns: string[];
+  restriction?: (hash: string) => Promise<{ expiresAt: number } | null>;
 }
 
-export function checkNetwork({ ipinfo, networks, flaggedAsns }: NetworkDeps): RequestHandler {
+export function checkNetwork({
+  ipinfo,
+  networks,
+  flaggedAsns,
+  restriction,
+}: NetworkDeps): RequestHandler {
   const watchlist = new Set(flaggedAsns);
   return async (req, res, next) => {
     try {
       const result = await ipinfo.lookup(req.ip);
-      if (!result.ipHash || result.status === 'disabled') return next();
+      if (!result.ipHash) return next();
+      if (result.status === 'disabled') {
+        if (restriction && ((await restriction(result.ipHash))?.expiresAt ?? 0) > Date.now())
+          return next(
+            new AppError(
+              403,
+              'NETWORK_BLOCKED',
+              'AI requests from this network are temporarily restricted. Contact support.',
+            ),
+          );
+        return next();
+      }
       const flagged = result.info.asn !== null && watchlist.has(result.info.asn);
       const activity: Omit<NetworkActivity, 'requests' | 'accountCount'> = {
         ...result.info,
@@ -29,6 +46,14 @@ export function checkNetwork({ ipinfo, networks, flaggedAsns }: NetworkDeps): Re
       const { uid } = currentUser(res);
       await networks.record(uid, activity);
       res.locals.network = activity;
+      if (restriction && ((await restriction(result.ipHash))?.expiresAt ?? 0) > Date.now())
+        return next(
+          new AppError(
+            403,
+            'NETWORK_BLOCKED',
+            'AI requests from this network are temporarily restricted. Contact support.',
+          ),
+        );
       if (flagged && (await networks.verifiedUntil(uid, result.ipHash)) <= Date.now()) {
         return next(
           new AppError(

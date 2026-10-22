@@ -6,6 +6,16 @@ import type {
   NetworkActivityResponse,
   Role,
   Style,
+  AdminUser,
+  AdminPage,
+  AuditEntry,
+  RuntimeSettings,
+  RuntimeLimits,
+  UserAction,
+  NetworkAction,
+  NetworkRestriction,
+  NetworkDetails,
+  AdminOverview,
 } from '@reelcraft/shared';
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
@@ -81,3 +91,51 @@ export const generateScript = (token: string, body: ScriptRequestInput) =>
 /** Creates the profile on first sign-in (users/{uid}) and returns the saved role and style. */
 export const startSession = (token: string) =>
   request<{ email?: string; role?: Role; style?: Style }>('/me/session', { method: 'POST', token });
+
+export const getRuntimeSettings = (token: string) =>
+  request<RuntimeSettings>('/config', { token, cache: 'no-store' });
+export const getAdminOverview = (token: string) =>
+  request<AdminOverview>('/admin/overview', { token, cache: 'no-store' });
+export const getAdminUsers = (token: string, search = '', status = '', cursor?: string) => {
+  const params = new URLSearchParams({ search, status });
+  if (cursor) params.set('cursor', cursor);
+  return request<AdminPage<AdminUser>>(`/admin/users?${params}`, { token, cache: 'no-store' });
+};
+export const changeAdminUser = (token: string, uid: string, action: UserAction) =>
+  request<AdminUser>(`/admin/users/${encodeURIComponent(uid)}/actions`, {
+    token,
+    method: 'POST',
+    body: JSON.stringify(action),
+  });
+export const getAdminSettings = (token: string) =>
+  request<RuntimeSettings>('/admin/settings', { token, cache: 'no-store' });
+export const saveAdminSettings = (
+  token: string,
+  limits: RuntimeLimits,
+  version: number,
+  reason: string,
+) =>
+  request<RuntimeSettings>('/admin/settings', {
+    token,
+    method: 'PUT',
+    body: JSON.stringify({ limits, version, reason }),
+  });
+export const getAdminAudit = (token: string, cursor?: string) =>
+  request<AdminPage<AuditEntry>>(
+    `/admin/audit${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`,
+    { token, cache: 'no-store' },
+  );
+export const getNetworkDetails = (token: string, hash: string, day: string, cursor?: string) => {
+  const query = new URLSearchParams({ day });
+  if (cursor) query.set('cursor', cursor);
+  return request<NetworkDetails>(`/admin/ips/${encodeURIComponent(hash)}?${query}`, {
+    token,
+    cache: 'no-store',
+  });
+};
+export const changeNetworkRestriction = (token: string, hash: string, action: NetworkAction) =>
+  request<NetworkRestriction>(`/admin/ips/${encodeURIComponent(hash)}/restriction`, {
+    token,
+    method: 'PUT',
+    body: JSON.stringify(action),
+  });

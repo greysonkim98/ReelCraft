@@ -106,7 +106,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               {path === '/admin/ips'
                 ? 'Network activity'
                 : admin
-                  ? 'Administration preview'
+                  ? 'Account & service management'
                   : 'A little footage. A great story.'}
             </span>
           </div>
@@ -159,7 +159,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             {(admin || canAccessAdminPage(accountRole, '/admin')) && (
               <NavLink href={admin ? '/projects' : '/admin'} onClick={() => setMenuOpen(false)}>
                 <Icon name={admin ? 'grid' : 'shield'} />
-                {admin ? 'Back to studio' : 'Console preview'}
+                {admin ? 'Back to studio' : 'Management console'}
               </NavLink>
             )}
           </nav>
@@ -208,7 +208,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               {path === '/admin/ips'
                 ? 'Protected activity'
                 : admin
-                  ? 'Sample data'
+                  ? 'Protected management'
                   : 'Made on your device'}
             </span>
             <a href="/help" className="icon-button" aria-label="Help">

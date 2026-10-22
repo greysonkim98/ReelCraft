@@ -9,16 +9,25 @@ import { canAccessAdminPage } from '@/lib/admin-access';
  * This UI guard never replaces the API's independent role check.
  */
 export function AdminGuard({ children }: { children: ReactNode }) {
-  const { user, role, loading } = useAuth();
+  const { user, role, loading, sessionError } = useAuth();
   const path = usePathname();
   const allowed = !!user && canAccessAdminPage(role, path);
 
   useEffect(() => {
     if (loading) return;
     if (!user) window.location.replace('/login');
-    else if (role && !allowed)
+    else if (role && !allowed && !sessionError)
       window.location.replace(role === 'support' ? '/admin/ips' : '/projects');
-  }, [loading, user, role, allowed]);
+  }, [loading, user, role, allowed, sessionError]);
+
+  if (sessionError)
+    return (
+      <div className="empty-state">
+        <h2>Access unavailable</h2>
+        <p role="alert">{sessionError}</p>
+        <a href="/login">Return to sign-in</a>
+      </div>
+    );
 
   if (!allowed)
     return (

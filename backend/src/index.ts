@@ -11,6 +11,11 @@ import { createFirestoreUsageStore, createMemoryUsageStore } from './services/us
 import { createFirestoreNetworkStore, createMemoryNetworkStore } from './services/networks';
 import { createNetworkVerifier } from './services/networkVerification';
 import { createFirestoreUserStore, createMemoryUserStore } from './services/users';
+import {
+  createAdminStore,
+  createFirestoreAdminStorage,
+  createMemoryAdminStorage,
+} from './services/admin';
 
 const env = loadEnv();
 const logger = pino({ level: 'info' });
@@ -37,6 +42,22 @@ const networkVerifier = env.FIREBASE_WEB_APP_ID
   ? createNetworkVerifier(projectId, env.FIREBASE_WEB_APP_ID)
   : undefined;
 const users = useMemory ? createMemoryUserStore() : createFirestoreUserStore(projectId);
+const admin = createAdminStore(
+  useMemory
+    ? createMemoryAdminStorage(
+        'all' in users
+          ? (users.all as Map<string, import('./services/users').UserRecord>)
+          : undefined,
+      )
+    : createFirestoreAdminStorage(projectId),
+  {
+    aiPerUserPerDay: env.AI_PER_USER_PER_DAY,
+    globalDailyAiCap: env.GLOBAL_DAILY_AI_CAP,
+    ipDailyCap: env.IP_DAILY_CAP,
+    maxClips: 10,
+    maxOutputSeconds: 60,
+  },
+);
 const verifier = createFirebaseVerifier(projectId);
 
 const script = createScriptService({
@@ -63,11 +84,13 @@ const app = createApp({
   logger,
   networks,
   networkVerifier,
+  admin,
 });
 const server = createServer(app);
 realtime = attachRealtime(server, {
   verifier,
   projects,
+  users,
   origins: env.CLIENT_ORIGIN.split(',').map((o) => o.trim()),
   logger,
 });

@@ -12,7 +12,16 @@ import {
   type User,
 } from 'firebase/auth';
 import { ROLES, type Role } from '@reelcraft/shared';
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { startSession } from './api';
 import { AUTH_EMULATOR, firebaseConfigured, getAuthClient } from './firebase';
 
@@ -30,6 +39,7 @@ interface AuthState {
   error: string | null;
   configured: boolean;
   signIn: () => Promise<void>;
+  signInWithPassword: (email: string, password: string) => Promise<void>;
   /** Emulator-only sign-in without Google. Undefined in production builds. */
   devSignIn?: () => Promise<void>;
   signOut: () => Promise<void>;
@@ -41,8 +51,10 @@ const AuthContext = createContext<AuthState | null>(null);
 
 function authErrorMessage(e: unknown): string {
   const code = (e as { code?: string }).code;
-  if (code === 'auth/unauthorized-domain') return 'This address is not an authorized sign-in domain for the project.';
-  if (code === 'auth/network-request-failed') return 'Network error. Check your connection and try again.';
+  if (code === 'auth/unauthorized-domain')
+    return 'This address is not an authorized sign-in domain for the project.';
+  if (code === 'auth/network-request-failed')
+    return 'Network error. Check your connection and try again.';
   return (e as Error).message;
 }
 
@@ -50,32 +62,25 @@ const isRole = (value: unknown): value is Role => (ROLES as readonly unknown[]).
 
 /**
  * Tells the server who just signed in so it can create or refresh users/{uid}, and returns the
- * account's role. Once per tab session per account: the role is kept in sessionStorage, so a role
- * changed in the console is picked up by the next tab session. Throws if the server cannot be
+ * account's current role. Fetch it on each page load rather than trusting a saved role. Throws if the server cannot be
  * reached; the caller decides what to do (it must not be swallowed silently).
  */
 async function recordSession(user: User): Promise<Role> {
-  const key = `reelcraft:session:${user.uid}`;
-  try {
-    const saved = sessionStorage.getItem(key);
-    if (isRole(saved)) return saved;
-  } catch {
-    // storage blocked: just ask the server
-  }
   const { role } = await startSession(await user.getIdToken());
   const confirmed: Role = isRole(role) ? role : 'user';
-  try {
-    sessionStorage.setItem(key, confirmed);
-  } catch {
-    // best effort
-  }
   return confirmed;
 }
 
 const DEV_EMAIL = 'dev@reelcraft.test';
 const DEV_PASSWORD = 'reelcraft-dev-password';
 
-export function AuthProvider({ mode, children }: { mode: 'signin' | 'session'; children: ReactNode }) {
+export function AuthProvider({
+  mode,
+  children,
+}: {
+  mode: 'signin' | 'session';
+  children: ReactNode;
+}) {
   const configured = firebaseConfigured();
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(configured);
@@ -123,7 +128,10 @@ export function AuthProvider({ mode, children }: { mode: 'signin' | 'session'; c
       await signInWithPopup(auth, provider);
     } catch (e) {
       const code = (e as { code?: string }).code;
-      if (code === 'auth/popup-blocked' || code === 'auth/operation-not-supported-in-this-environment') {
+      if (
+        code === 'auth/popup-blocked' ||
+        code === 'auth/operation-not-supported-in-this-environment'
+      ) {
         try {
           await signInWithRedirect(auth, provider);
         } catch (e2) {
@@ -149,6 +157,18 @@ export function AuthProvider({ mode, children }: { mode: 'signin' | 'session'; c
     }
   }, [mode]);
 
+  const signInWithPassword = useCallback(
+    async (email: string, password: string) => {
+      setError(null);
+      try {
+        await signInWithEmailAndPassword(getAuthClient(mode), email.trim(), password);
+      } catch {
+        setError('Sign-in failed. Check your email and password.');
+      }
+    },
+    [mode],
+  );
+
   const signOut = useCallback(async () => {
     await fbSignOut(getAuthClient(mode));
   }, [mode]);
@@ -168,11 +188,24 @@ export function AuthProvider({ mode, children }: { mode: 'signin' | 'session'; c
       error,
       configured,
       signIn,
+      signInWithPassword,
       devSignIn: AUTH_EMULATOR ? devSignIn : undefined,
       signOut,
       getToken,
     }),
-    [user, loading, role, sessionError, error, configured, signIn, devSignIn, signOut, getToken],
+    [
+      user,
+      loading,
+      role,
+      sessionError,
+      error,
+      configured,
+      signIn,
+      signInWithPassword,
+      devSignIn,
+      signOut,
+      getToken,
+    ],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

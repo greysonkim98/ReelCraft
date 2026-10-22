@@ -7,6 +7,7 @@ import { createIpInfoService } from '../src/services/ipinfo';
 import { createMemoryNetworkStore } from '../src/services/networks';
 import { createMemoryProjectStore } from '../src/services/projects';
 import { createMemoryUsageStore, utcDay } from '../src/services/usage';
+import { createMemoryUserStore } from '../src/services/users';
 import { fakeVerifier, makeRequest } from './helpers';
 
 const auth = (uid = 'alice') => ({ Authorization: `Bearer good-${uid}` });
@@ -20,6 +21,7 @@ function setup(extra: NodeJS.ProcessEnv = {}, outage = false) {
   });
   const networks = createMemoryNetworkStore();
   const usage = createMemoryUsageStore();
+  const users = createMemoryUserStore();
   const fetchFn = vi.fn<typeof fetch>().mockImplementation(async (url) =>
     outage
       ? new Response('{}', { status: 503 })
@@ -52,6 +54,7 @@ function setup(extra: NodeJS.ProcessEnv = {}, outage = false) {
     ipinfo,
     networks,
     usage,
+    users,
     verifier: fakeVerifier,
     networkVerifier: { verify },
     script: { generateScript },
@@ -70,7 +73,7 @@ function setup(extra: NodeJS.ProcessEnv = {}, outage = false) {
       .set('X-Forwarded-For', ip)
       .set('X-Firebase-AppCheck', token)
       .send({});
-  return { app, post, verifyIp, verify, networks, usage, generateScript, fetchFn };
+  return { app, post, verifyIp, verify, networks, users, usage, generateScript, fetchFn };
 }
 afterEach(() => vi.restoreAllMocks());
 
@@ -193,9 +196,9 @@ describe('admin network activity', () => {
   });
 
   it('allows support/admin roles, validates queries and paginates without exposing UIDs', async () => {
-    const { app, post, networks } = setup();
-    networks.roles.set('support', 'support');
-    networks.roles.set('admin', 'admin');
+    const { app, post, users } = setup();
+    users.all.set('support', { role: 'support' });
+    users.all.set('admin', { role: 'admin' });
     await post();
     await post('bob', '1.1.1.1');
     const first = await request(app).get('/api/v1/admin/ips?limit=1').set(auth('support'));

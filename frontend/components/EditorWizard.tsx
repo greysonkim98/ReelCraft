@@ -18,7 +18,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { Icon } from './ui/Icon';
-import { ApiError, generateScript, getHealth, getUsage } from '@/lib/api';
+import { ApiError, generateScript, getHealth, getUsage, getRuntimeSettings } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { analyzeClips, type AnalyzeProgress } from '@/lib/ffmpeg/analyze';
 import { RenderMemoryError, encodeVideo } from '@/lib/ffmpeg/encode';
@@ -36,7 +36,6 @@ interface ClipItem {
   note: string;
 }
 
-const LIMITS = DEFAULT_LIMITS;
 const STEPS = ['Clips', 'Style', 'Analyze', 'Captions', 'Review', 'Render', 'Share'] as const;
 const STAGE_DESCRIPTIONS = [
   'Start with the moments you want to keep.',
@@ -115,6 +114,17 @@ function ProgressBar({ value, label }: { value: number; label?: string }) {
 
 export function EditorWizard() {
   const { user, signOut, getToken } = useAuth();
+  const [projectLimits, setProjectLimits] = useState({
+    maxClips: 10,
+    maxOutputSeconds: Number(DEFAULT_LIMITS.maxOutputSeconds),
+  });
+  const LIMITS = { ...DEFAULT_LIMITS, ...projectLimits };
+  const refreshLimits = useCallback(async () => {
+    if (!user) return { maxClips: 10, maxOutputSeconds: Number(DEFAULT_LIMITS.maxOutputSeconds) };
+    const { limits } = await getRuntimeSettings(await getToken());
+    setProjectLimits({ maxClips: limits.maxClips, maxOutputSeconds: limits.maxOutputSeconds });
+    return limits;
+  }, [user, getToken]);
   const pathname = usePathname();
   const router = useRouter();
   const stage = pathname.split('/')[2]?.toLowerCase() ?? 'clips';
@@ -126,6 +136,9 @@ export function EditorWizard() {
   const [maxStep, setMaxStep] = useState(1);
   const [clips, setClips] = useState<ClipItem[]>([]);
   const [messages, setMessages] = useState<string[]>([]);
+  useEffect(() => {
+    if (user) void refreshLimits().catch((error) => setMessages([(error as Error).message]));
+  }, [user, refreshLimits]);
   const [importing, setImporting] = useState(false);
   const [style, setStyle] = useState<Style>({
     color: 'natural',
@@ -246,6 +259,13 @@ export function EditorWizard() {
 
   // ---------- step 1: import ----------
   async function addFiles(list: File[]) {
+    let currentLimits: { maxClips: number };
+    try {
+      currentLimits = await refreshLimits();
+    } catch (error) {
+      setMessages([(error as Error).message]);
+      return;
+    }
     setImporting(true);
     const notes: string[] = [];
     const accepted: ClipItem[] = [];
@@ -253,6 +273,10 @@ export function EditorWizard() {
     const known = new Set(clips.map((c) => c.fingerprint));
     const sorted = [...list].sort((a, b) => a.lastModified - b.lastModified);
     for (const file of sorted) {
+      if (clips.length + accepted.length >= currentLimits.maxClips) {
+        notes.push(`A project can contain at most ${currentLimits.maxClips} clips.`);
+        break;
+      }
       if (!file.type.startsWith('video/') && !/\.(mov|mp4|m4v|webm|mkv)$/i.test(file.name)) {
         notes.push(`${file.name}: not a video file.`);
         continue;
@@ -326,11 +350,14 @@ export function EditorWizard() {
     abortRef.current = controller;
     setAnalysis({ running: true });
     try {
+      const currentLimits = await refreshLimits();
+      if (clips.length > currentLimits.maxClips)
+        throw new Error(`Remove clips to meet the current ${currentLimits.maxClips}-clip limit.`);
       const result = await analyzeClips({
         files: clips.map((c) => c.file),
         durations: clips.map((c) => c.duration),
         tempo: style.tempo,
-        maxOutputSeconds: LIMITS.maxOutputSeconds,
+        maxOutputSeconds: currentLimits.maxOutputSeconds,
         signal: controller.signal,
         onProgress: (progress) => setAnalysis({ running: true, progress }),
       });
@@ -357,6 +384,9 @@ export function EditorWizard() {
   async function runAi() {
     setAi({ running: true });
     try {
+      const currentLimits = await refreshLimits();
+      if (clips.length > currentLimits.maxClips)
+        throw new Error(`The current project limit is ${currentLimits.maxClips} clips.`);
       const token = await getToken();
       const res = await generateScript(token, {
         scenes: segments.map((s) => {
@@ -452,6 +482,14 @@ export function EditorWizard() {
     setRender({ running: true, fraction: 0 });
     report('rendering', 0);
     try {
+      const currentLimits = await refreshLimits();
+      if (
+        clips.length > currentLimits.maxClips ||
+        totalSeconds > currentLimits.maxOutputSeconds + 0.001
+      )
+        throw new Error(
+          `This project exceeds the current limits: ${currentLimits.maxClips} clips and ${currentLimits.maxOutputSeconds} seconds.`,
+        );
       const blob = await encodeVideo({
         files: clips.map((c) => c.file),
         hasAudio,
