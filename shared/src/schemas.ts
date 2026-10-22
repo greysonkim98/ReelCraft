@@ -3,6 +3,9 @@ import {
   COLOR_LOOKS,
   NOTE_MAX_CHARS,
   QUALITIES,
+  REEL_IMAGES_MAX,
+  REEL_IMAGE_MAX_BASE64_CHARS,
+  REEL_IMAGE_SCENES_MAX,
   SCENES_MAX_COUNT,
   SCENES_TOTAL_MAX_SECONDS,
   SCENE_MAX_SECONDS,
@@ -58,7 +61,10 @@ export const llmResponseSchema = z.object({
 
 const tagList = z.array(z.string().trim().min(1).max(30)).max(6).default([]);
 
-/** One scene picked on the device. Text only: no frames, no file paths ever cross the wire. */
+/**
+ * One scene picked on the device. No file paths ever cross the wire. The only image data the server
+ * sees is the labeled grid images that ride along with POST /ai/script; they are never stored.
+ */
 export const sceneSchema = z
   .object({
     scene_id: z.string().min(1).max(40),
@@ -83,6 +89,22 @@ export const scriptRequestSchema = z
     scenes: z.array(sceneSchema).min(1).max(SCENES_MAX_COUNT),
     userPrompt: z.string().trim().min(1).max(USER_PROMPT_MAX_CHARS),
     userMemos: z.array(z.string().trim().min(1).max(USER_MEMO_MAX_CHARS)).max(USER_MEMOS_MAX_COUNT).default([]),
+    /**
+     * Grid pictures of the scenes (cells labeled with their scene_id), base64 JPEG without the data:
+     * prefix. Optional: without them the script is written from tags and notes only.
+     */
+    images: z
+      .array(
+        z.object({
+          scene_ids: z.array(z.string().min(1).max(40)).min(1).max(REEL_IMAGE_SCENES_MAX),
+          jpeg: z
+            .string()
+            .max(REEL_IMAGE_MAX_BASE64_CHARS)
+            .regex(/^[A-Za-z0-9+/]+={0,2}$/, 'image must be base64'),
+        }),
+      )
+      .max(REEL_IMAGES_MAX)
+      .default([]),
   })
   .superRefine((req, ctx) => {
     const ids = new Set<string>();

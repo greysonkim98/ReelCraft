@@ -47,7 +47,7 @@ export const getHealth = () => request<{ ok: boolean; time: string }>('/health')
 
 export const getUsage = (token: string) => request<UsageInfo>('/me/usage', { token });
 
-/** scenes.json in, script JSON out. Costs one of the account's daily AI uses. */
+/** scenes.json (plus a few labeled grid images) in, script JSON out: ONE Groq call, one daily AI use. */
 export const generateScript = (token: string, body: ScriptRequestInput) =>
   request<GenerateScriptResponse>('/ai/script', { method: 'POST', token, body: JSON.stringify(body) });
 

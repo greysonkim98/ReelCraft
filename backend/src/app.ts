@@ -14,6 +14,9 @@ import type { ScriptService } from './services/script';
 import type { UsageStore } from './services/usage';
 import { createMemoryUserStore, type UserStore } from './services/users';
 
+/** POST /ai/script can carry up to 3 grid JPEGs as base64. */
+const SCRIPT_BODY_LIMIT = '1mb';
+
 export interface AppDeps {
   env: Env;
   script: ScriptService;
@@ -37,6 +40,9 @@ export function createApp({ env, script, verifier, usage, projects, users, notif
       credentials: true,
     }),
   );
+  // Grid images are base64 JPEGs, so that one route gets a larger body limit. It is mounted first:
+  // body-parser skips a request that is already parsed.
+  app.use('/api/v1/ai/script', express.json({ limit: SCRIPT_BODY_LIMIT }));
   app.use(express.json({ limit: '200kb' }));
   app.use(
     pinoHttp({
@@ -71,7 +77,7 @@ export function createApp({ env, script, verifier, usage, projects, users, notif
       verifier,
       usage,
       projects,
-      users: users ?? createMemoryUserStore(),
+      users: users ??createMemoryUserStore(),
       notifier: notifier ?? noopNotifier,
       limits: { perUser: env.AI_PER_USER_PER_DAY, global: env.GLOBAL_DAILY_AI_CAP, perIp: env.IP_DAILY_CAP },
       ipHashSalt: env.IP_HASH_SALT,

@@ -3,11 +3,11 @@ import { AppError } from '../src/lib/errors';
 import { buildFallbackScript, createScriptService, isPlaceWord, trimToPhrase, truncateAtWord } from '../src/services/script';
 import { fakeGroq, groqBody, httpStatus, llmLine, makeRequest } from './helpers';
 
-const service = (queue: Parameters<typeof fakeGroq>[0], apiKey: string | null = 'key') => {
+const service = (queue: Parameters<typeof fakeGroq>[0], apiKey: string | null = 'key', visionModel?: string) => {
   const groq = fakeGroq(queue);
   return {
     ...groq,
-    svc: createScriptService({ apiKey: apiKey ?? undefined, model: 'openai/gpt-oss-20b', fallbackModel: 'openai/gpt-oss-120b', fetchFn: groq.fetchFn }),
+    svc: createScriptService({ apiKey: apiKey ?? undefined, model: 'openai/gpt-oss-20b', visionModel, fetchFn: groq.fetchFn }),
   };
 };
 
@@ -30,11 +30,12 @@ describe('script service', () => {
     expect(body.max_completion_tokens).toBeLessThanOrEqual(2400);
   });
 
-  it('sends only text: tags, memos and prompt, no timestamps or scores', async () => {
+  it('sends only text without images: tags, memos and prompt, no timestamps or scores', async () => {
     const req = makeRequest(2);
     const { svc, requests } = service([groqBody({ title: 'T', scenes: req.scenes.map((s) => llmLine(s.scene_id)) })]);
     await svc.generateScript(req);
     const user = (requests[0]!.body.messages as { role: string; content: string }[])[1]!.content;
+    expect(typeof user).toBe('string');
     expect(user).toContain('relaxing travel reel');
     expect(user).toContain('Gwangalli beach');
     expect(user).not.toContain('"score"');
@@ -55,96 +56,41 @@ describe('script service', () => {
     expect(requests).toHaveLength(1);
   });
 
-  it('re-asks only the failed scenes, once', async () => {
+  it('repairs a missing or too-long line on the server, with no second request', async () => {
     const req = makeRequest(3); // max 20 chars per line
     const { svc, requests } = service([
-      groqBody({ title: 'T', scenes: [llmLine('s01'), llmLine('s02', 'This line is far too long to fit'), llmLine('s03')] }),
-      groqBody({ title: 'T', scenes: [llmLine('s02', 'Short and sweet')] }),
+      groqBody({ title: 'T', scenes: [llmLine('s01'), llmLine('s02', 'This line is far too long to fit')] }),
     ]);
     const out = await svc.generateScript(req);
-    expect(out.calls).toBe(2);
-    expect(out.script.scenes[1]!.caption).toBe('Short and sweet');
-    expect(out.repairedScenes).toEqual([]);
-
-    const retryUser = JSON.parse((requests[1]!.body.messages as { content: string }[])[1]!.content) as { scenes: { scene_id: string }[] };
-    expect(retryUser.scenes.map((s) => s.scene_id)).toEqual(['s02']);
-  });
-
-  it('asks for a scene that the answer left out', async () => {
-    const req = makeRequest(3);
-    const { svc, requests } = service([
-      groqBody({ title: 'T', scenes: [llmLine('s01'), llmLine('s03')] }),
-      groqBody({ title: 'T', scenes: [llmLine('s02', 'Middle moment')] }),
-    ]);
-    const out = await svc.generateScript(req);
-    expect(out.calls).toBe(2);
-    expect(out.script.scenes.map((s) => s.caption)[1]).toBe('Middle moment');
-    expect(requests).toHaveLength(2);
-  });
-
-  it('trims a line that is still too long after the retry, and reports it', async () => {
-    const req = makeRequest(2);
-    const long = 'This line keeps going and going forever';
-    const { svc } = service([
-      groqBody({ title: 'T', scenes: [llmLine('s01'), llmLine('s02', long)] }),
-      groqBody({ title: 'T', scenes: [llmLine('s02', long)] }),
-    ]);
-    const out = await svc.generateScript(req);
-    expect(out.script.scenes[1]!.caption.length).toBeLessThanOrEqual(20);
-    expect(out.script.scenes[1]!.voiceover!.length).toBeLessThanOrEqual(20);
-    expect(out.repairedScenes).toEqual(['s02']);
-  });
-
-  it('never makes more than two calls, even when the partial retry fails', async () => {
-    const req = makeRequest(2);
-    const { svc, requests } = service([
-      groqBody({ title: 'T', scenes: [llmLine('s01')] }),
-      httpStatus(500),
-    ]);
-    const out = await svc.generateScript(req);
-    expect(requests.length).toBeLessThanOrEqual(2);
-    expect(out.script.scenes).toHaveLength(2);
-    expect(out.repairedScenes).toEqual(['s02']);
+    expect(requests).toHaveLength(1);
+    expect(out.calls).toBe(1);
     expect(out.source).toBe('llm');
+    expect(out.repairedScenes).toEqual(['s02', 's03']);
+    expect(out.script.scenes.every((s) => s.caption.length > 0 && s.caption.length <= 20)).toBe(true);
   });
 
-  it('retries the whole request once when the JSON is invalid, then falls back to memos', async () => {
+  it('uses the memo fallback when the JSON is invalid, and counts the call as spent', async () => {
     const req = makeRequest(2);
-    const { svc, requests } = service([groqBody('this is not json'), groqBody('{"nope":true}')]);
+    const { svc, requests } = service([groqBody('this is not json'), groqBody({ title: 'T', scenes: req.scenes.map((s) => llmLine(s.scene_id)) })]);
     const out = await svc.generateScript(req);
-    expect(requests).toHaveLength(2);
+    expect(requests).toHaveLength(1);
     expect(out.source).toBe('fallback');
+    expect(out.calls).toBe(1);
     expect(out.script.scenes[0]!.caption).toBe('Busan day 1');
     expect(out.script.scenes.every((s) => s.voiceover === null)).toBe(true);
   });
 
-  it('recovers when the second full request is valid', async () => {
-    const req = makeRequest(2);
-    const { svc } = service([groqBody('oops'), groqBody({ title: 'T', scenes: req.scenes.map((s) => llmLine(s.scene_id)) })]);
-    const out = await svc.generateScript(req);
-    expect(out.source).toBe('llm');
-    expect(out.calls).toBe(2);
-  });
-
-  it('uses the larger model when the primary answers 429', async () => {
-    const req = makeRequest(2);
-    const { svc, requests } = service([httpStatus(429), groqBody({ title: 'T', scenes: req.scenes.map((s) => llmLine(s.scene_id)) })]);
-    const out = await svc.generateScript(req);
-    expect(requests.map((r) => r.model)).toEqual(['openai/gpt-oss-20b', 'openai/gpt-oss-120b']);
-    expect(out.model).toBe('openai/gpt-oss-120b');
-    expect(out.source).toBe('llm');
-  });
-
-  it('uses the larger model after a timeout or network error', async () => {
-    const req = makeRequest(1);
-    const { svc } = service([new Error('timeout'), groqBody({ title: 'T', scenes: [llmLine('s01')] })]);
-    expect((await svc.generateScript(req)).model).toBe('openai/gpt-oss-120b');
-  });
-
-  it('builds a script from memos and tags when both models fail', async () => {
+  it.each([
+    ['429', httpStatus(429)],
+    ['503', httpStatus(503)],
+    ['401', httpStatus(401)],
+    ['400', httpStatus(400)],
+    ['a network error', new Error('timeout')],
+  ])('makes no second request after %s and builds the script from memos and tags', async (_name, failure) => {
     const req = makeRequest(3);
-    const { svc } = service([httpStatus(429), httpStatus(503)]);
+    const { svc, requests } = service([failure, groqBody({ title: 'T', scenes: req.scenes.map((s) => llmLine(s.scene_id)) })]);
     const out = await svc.generateScript(req);
+    expect(requests).toHaveLength(1);
     expect(out.source).toBe('fallback');
     expect(out.calls).toBe(0);
     expect(out.model).toBeNull();
@@ -152,21 +98,31 @@ describe('script service', () => {
     expect(out.script.scenes.every((s) => s.caption.length > 0 && s.caption.length <= 20)).toBe(true);
   });
 
-  it('does not fall back to another model on a 401', async () => {
-    const req = makeRequest(1);
-    const { svc, requests } = service([httpStatus(401)]);
+  it('sends the grid images to the vision model in the same single request', async () => {
+    const jpeg = Buffer.from('fake-jpeg').toString('base64');
+    const req = makeRequest(2, { images: [{ scene_ids: ['s01', 's02'], jpeg }] });
+    const { svc, requests } = service([groqBody({ title: 'T', scenes: req.scenes.map((s) => llmLine(s.scene_id)) })], 'key', 'qwen/vision');
     const out = await svc.generateScript(req);
+
     expect(requests).toHaveLength(1);
-    expect(out.source).toBe('fallback');
+    expect(requests[0]!.model).toBe('qwen/vision');
+    expect(out.model).toBe('qwen/vision');
+    const body = requests[0]!.body as { response_format: { type: string }; reasoning_effort?: string; messages: { content: unknown }[] };
+    expect(body.response_format.type).toBe('json_object');
+    expect(body.reasoning_effort).toBeUndefined();
+    expect((requests[0]!.body as { max_completion_tokens: number }).max_completion_tokens).toBeLessThanOrEqual(1000);
+    const parts = body.messages[1]!.content as { type: string; text?: string; image_url?: { url: string } }[];
+    expect(parts.filter((p) => p.type === 'image_url')).toHaveLength(1);
+    expect(parts.find((p) => p.type === 'image_url')!.image_url!.url).toBe(`data:image/jpeg;base64,${jpeg}`);
+    expect(JSON.parse(parts[0]!.text!).scenes[0].image).toBe(1);
   });
 
-  it('asks again with plain JSON mode when the schema is refused', async () => {
-    const req = makeRequest(1);
-    const { svc, requests } = service([httpStatus(400), groqBody({ title: 'T', scenes: [llmLine('s01')] })]);
-    const out = await svc.generateScript(req);
-    expect((requests[1]!.body.response_format as { type: string }).type).toBe('json_object');
-    expect(out.source).toBe('llm');
-    expect(out.calls).toBe(1);
+  it('ignores the images when no vision model is configured', async () => {
+    const req = makeRequest(1, { images: [{ scene_ids: ['s01'], jpeg: 'AAAA' }] });
+    const { svc, requests } = service([groqBody({ title: 'T', scenes: [llmLine('s01')] })]);
+    await svc.generateScript(req);
+    expect(requests[0]!.model).toBe('openai/gpt-oss-20b');
+    expect(typeof (requests[0]!.body.messages as { content: unknown }[])[1]!.content).toBe('string');
   });
 
   it('answers CONFIG_MISSING without a key', async () => {

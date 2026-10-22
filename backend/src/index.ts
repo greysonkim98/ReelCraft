@@ -33,7 +33,7 @@ const verifier = createFirebaseVerifier(projectId);
 const script = createScriptService({
   apiKey: env.GROQ_API_KEY,
   model: env.GROQ_MODEL,
-  fallbackModel: env.GROQ_FALLBACK_MODEL,
+  visionModel: env.GROQ_VISION_MODEL,
 });
 
 // Socket.IO attaches to the HTTP server that wraps the app, so the app gets a notifier that

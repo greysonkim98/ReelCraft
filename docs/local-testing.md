@@ -58,3 +58,12 @@ npx tsx scripts/browser-smoke.ts
   리다이렉트가 동작합니다. 두 페이지 사이는 **전체 페이지 로드**로만 이동합니다(`window.location`).
   `router.push` 같은 앱 내부 이동을 쓰면 `/editor`가 격리되지 않아 느린 모드로 돌아갑니다.
 - Firestore 에뮬레이터는 Java가 필요합니다(이 PC에는 없음). 그전에는 `STORE=memory`로 개발합니다.
+
+## 6. 관리자(admin) 지정
+로그인하면 서버가 `users/{uid}` 문서를 만들고(`role: "user"`), 역할에 따라 이동합니다. `admin`은 `/admin`(관리 콘솔), 나머지는 `/projects`로 가고, 관리자가 아닌 사람이 `/admin`을 열면 `/projects`로 돌아갑니다.
+
+관리자는 **Firebase 콘솔 → Firestore → `users` → 해당 계정 문서**에서 `role` 필드를 `admin`으로 직접 바꿔서 지정합니다. 서버는 이 값을 바꾸지 않고(Firestore 규칙상 클라이언트도 쓸 수 없음), 값이 없거나 이상하면 `user`로 취급합니다.
+- 그 계정이 한 번도 로그인한 적이 없으면 문서가 없으니, 먼저 로그인해서 문서를 만든 뒤 바꿉니다.
+- 역할은 탭 세션 동안 저장됩니다. 바꾼 뒤에는 로그아웃 후 새 탭에서 다시 로그인하세요.
+- 프런트의 `/admin` 차단은 화면을 숨기는 용도입니다. 관리자 전용 API를 만들면 서버에서 `role`을 다시 확인해야 합니다.
+- 프로필 동기화(`POST /me/session`)가 실패하면 브라우저 콘솔(F12)에 `[auth] could not sync the profile` 경고가 남습니다.

@@ -21,6 +21,7 @@ export function makeRequest(n = 3, overrides: Partial<ScriptRequest> = {}): Scri
     scenes: makeScenes(n),
     userPrompt: 'relaxing travel reel',
     userMemos: ['Busan day 1', 'Gwangalli beach'],
+    images: [],
     ...overrides,
   };
 }

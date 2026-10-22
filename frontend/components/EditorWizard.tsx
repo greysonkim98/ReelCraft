@@ -4,6 +4,7 @@ import {
   COLOR_LOOKS,
   DEFAULT_LIMITS,
   NOTE_MAX_CHARS,
+  REEL_IMAGE_SCENES_MAX,
   SCENE_MAX_SECONDS,
   SUBTITLE_STYLES,
   TEMPOS,
@@ -23,6 +24,7 @@ import { useAuth } from '@/lib/auth';
 import { analyzeClips, type AnalyzeProgress } from '@/lib/ffmpeg/analyze';
 import { RenderMemoryError, encodeVideo } from '@/lib/ffmpeg/encode';
 import { CancelledError, cancelFFmpeg } from '@/lib/ffmpeg/loader';
+import { buildSceneGrids, evenlySpaced } from '@/lib/ffmpeg/sampleFrames';
 import { computeFingerprint } from '@/lib/fingerprint';
 import { readClipInfo } from '@/lib/media';
 import { createProgressReporter, type ProgressReporter } from '@/lib/realtime';
@@ -37,6 +39,7 @@ interface ClipItem {
 }
 
 const LIMITS = DEFAULT_LIMITS;
+
 const STEPS = ['Clips', 'Style', 'Analyze', 'Captions', 'Review', 'Render', 'Share'] as const;
 const STAGE_DESCRIPTIONS = [
   'Start with the moments you want to keep.',
@@ -148,10 +151,14 @@ export function EditorWizard() {
   const [usage, setUsage] = useState<UsageInfo | null>(null);
   const [ai, setAi] = useState<{
     running: boolean;
+    /** 'looking' = packing the scene frames, 'writing' = the single AI request */
+    phase?: 'looking' | 'writing';
     error?: string;
     done?: boolean;
     fallback?: boolean;
     model?: string | null;
+    /** false = the scene frames could not be read, so the captions only use the topic and notes */
+    described?: boolean;
   }>({
     running: false,
   });
@@ -354,27 +361,47 @@ export function EditorWizard() {
   const outOfUses = usage !== null && usage.remaining <= 0;
 
   async function runAi() {
-    setAi({ running: true });
+    setAi({ running: true, phase: 'looking' });
     try {
       const token = await getToken();
+      const scenes = segments.map((s) => {
+        const start = round1(s.start);
+        return {
+          scene_id: s.id,
+          start,
+          end: Math.max(start + 0.1, round1(Math.min(s.end, s.start + SCENE_MAX_SECONDS))),
+          mood: [] as string[],
+          setting: [] as string[],
+          people: false,
+          hearted: false,
+          score: Math.min(1, Math.max(0, s.score ?? 0)),
+          max_chars: s.maxChars,
+        };
+      });
+
+      // Pack the scenes into a few labeled grid images that ride along with the one script request.
+      // Best effort: if the frames cannot be read, the captions are still written from the topic and
+      // notes, just without seeing the scenes. The free vision quota is small, so at most 9 scenes
+      // are shown, spread across the reel.
+      let grids: Awaited<ReturnType<typeof buildSceneGrids>> = [];
+      try {
+        const picks = evenlySpaced(scenes.length, REEL_IMAGE_SCENES_MAX);
+        grids = await buildSceneGrids(
+          clips.map((c) => c.file),
+          picks.map((i) => ({ scene_id: scenes[i]!.scene_id, clipIndex: segments[i]!.clipIndex, start: scenes[i]!.start, end: scenes[i]!.end })),
+        );
+      } catch {
+        grids = [];
+      }
+
+      setAi({ running: true, phase: 'writing' });
       const res = await generateScript(token, {
-        scenes: segments.map((s) => {
-          const start = round1(s.start);
-          return {
-            scene_id: s.id,
-            start,
-            end: Math.max(start + 0.1, round1(Math.min(s.end, s.start + SCENE_MAX_SECONDS))),
-            mood: [],
-            setting: [],
-            people: false,
-            hearted: false,
-            score: Math.min(1, Math.max(0, s.score ?? 0)),
-            max_chars: s.maxChars,
-          };
-        }),
+        scenes,
         userPrompt: userPrompt.trim(),
         userMemos: memos,
+        images: grids,
       });
+      const described = grids.length > 0;
       const byId = new Map(res.script.scenes.map((l) => [l.scene_id, l.caption]));
       setSegments((prev) =>
         prev.map((s) => ({ ...s, subtitle: byId.get(s.id) ?? s.subtitle, editedByUser: false })),
@@ -382,7 +409,7 @@ export function EditorWizard() {
       setUsage(res.usage);
       reporterRef.current?.close();
       reporterRef.current = createProgressReporter({ projectId: res.projectId, getToken });
-      setAi({ running: false, done: true, fallback: res.source === 'fallback', model: res.model });
+      setAi({ running: false, done: true, fallback: res.source === 'fallback', model: res.model, described });
     } catch (err) {
       const e = err as ApiError;
       if (e.code === 'DAILY_LIMIT') {
@@ -926,8 +953,9 @@ export function EditorWizard() {
                 AI captions
               </h2>
               <p className="text-sm text-slate-600">
-                Describe the reel you want. Only this sentence, your clip notes and each
-                scene&apos;s length are sent to the AI. Your video is not.
+                Describe the reel you want. This sentence, your clip notes, each scene&apos;s
+                length and one small still picture per scene are sent to the AI. Your video
+                itself is not, and the pictures are not stored.
               </p>
               <label className="block space-y-1 text-sm">
                 <span className="font-medium">What kind of reel is this?</span>
@@ -965,7 +993,9 @@ export function EditorWizard() {
                   className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
                 >
                   {ai.running
-                    ? 'Writing captions…'
+                    ? ai.phase === 'looking'
+                      ? 'Looking at your scenes…'
+                      : 'Writing captions…'
                     : segments.some((s) => s.subtitle)
                       ? 'Write them again'
                       : 'Write captions with AI'}
@@ -995,6 +1025,8 @@ export function EditorWizard() {
                   data-testid="ai-done"
                 >
                   Done. Review and edit the captions in the next step.
+                  {ai.described === false &&
+                    ' The scenes could not be looked at this time, so the captions follow your topic and notes only.'}
                 </p>
               )}
               {ai.done && ai.fallback && (

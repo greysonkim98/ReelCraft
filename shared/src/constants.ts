@@ -18,9 +18,26 @@ export const VOICE_SPEED = { min: 0.8, max: 1.2, default: 1.0 } as const;
 /** Groq free tier: gpt-oss-20b is the smallest chat model with strict structured outputs. */
 export const GROQ_MODELS = {
   primary: 'openai/gpt-oss-20b',
-  /** Separate per-model quota, used when the primary answers 429 / 5xx / times out. */
-  fallback: 'openai/gpt-oss-120b',
 } as const;
+
+/**
+ * Groq vision model (image + text in, JSON out). Checked against GET /models on 2026-10-16: the only
+ * generally available vision model (Llama 4 Scout/Maverick are no longer listed). Free tier is
+ * 8K tokens/min and 200K/day, and one image costs about 1.3-1.8K tokens whatever its size, so the
+ * device packs the scenes into at most 2 labeled grid images. One request per project, no retries.
+ * The list changes often: override with GROQ_VISION_MODEL if this is retired.
+ */
+export const GROQ_VISION_MODEL = 'qwen/qwen3.8-27b';
+
+/**
+ * Free tier input is 7000 tokens/min and one image costs about 2048, so a project sends at most 2
+ * images (Groq itself would accept 3). Each is a 2x2 grid of labeled scenes.
+ */
+export const REEL_IMAGES_MAX = 2;
+/** Scenes shown to the model per project (2 grid images of up to 4 scenes each). */
+export const REEL_IMAGE_SCENES_MAX = 8;
+/** Base64 length of one grid JPEG. */
+export const REEL_IMAGE_MAX_BASE64_CHARS = 150_000;
 
 /**
  * Product limits. The AI caps follow Groq's free tier (200K tokens/day shared by the whole

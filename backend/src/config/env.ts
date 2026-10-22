@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { DEFAULT_LIMITS, GROQ_MODELS } from '@reelcraft/shared';
+import { DEFAULT_LIMITS, GROQ_MODELS, GROQ_VISION_MODEL } from '@reelcraft/shared';
 import dotenv from 'dotenv';
 import { z } from 'zod';
 
@@ -24,7 +24,7 @@ const envSchema = z.object({
   // Groq (checked when a request needs it, with a message naming the variable).
   GROQ_API_KEY: optionalString,
   GROQ_MODEL: z.preprocess(emptyToUndefined, z.string().default(GROQ_MODELS.primary)),
-  GROQ_FALLBACK_MODEL: z.preprocess(emptyToUndefined, z.string().default(GROQ_MODELS.fallback)),
+  GROQ_VISION_MODEL: z.preprocess(emptyToUndefined, z.string().default(GROQ_VISION_MODEL)),
 
   // Firebase. On Cloud Run the Admin SDK uses the service account automatically, so only the
   // project id is needed. Locally, set FIREBASE_AUTH_EMULATOR_HOST to accept emulator tokens.
