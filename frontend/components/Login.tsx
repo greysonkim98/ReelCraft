@@ -1,16 +1,31 @@
 'use client';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth';
 import { Brand } from './ui/Brand';
 import { Icon } from './ui/Icon';
 export function Login() {
-  const { user, role, loading, error, configured, signIn, devSignIn } = useAuth();
+  const {
+    user,
+    role,
+    loading,
+    error,
+    sessionError,
+    configured,
+    signIn,
+    signInWithPassword,
+    signOut,
+    devSignIn,
+  } = useAuth();
+  const [email, setEmail] = useState(''),
+    [password, setPassword] = useState(''),
+    [busy, setBusy] = useState(false);
   // Wait for the role: leaving the page earlier cancels the profile request that is still in flight.
   // Admins (set by hand in the console) go to the management console, everyone else to their projects.
   useEffect(() => {
-    if (user && role) window.location.replace(role === 'admin' ? '/admin' : '/projects');
-  }, [user, role]);
+    if (user && role && !sessionError)
+      window.location.replace(role === 'admin' || role === 'support' ? '/admin' : '/projects');
+  }, [user, role, sessionError]);
   return (
     <main className="login-page">
       <section className="login-form-side">
@@ -33,6 +48,49 @@ export function Login() {
               {error}
             </p>
           )}
+          {sessionError && (
+            <p className="notice" role="alert">
+              {sessionError}{' '}
+              <button className="text-link" onClick={() => void signOut()}>
+                Sign out
+              </button>
+            </p>
+          )}
+          <form
+            onSubmit={async (event) => {
+              event.preventDefault();
+              setBusy(true);
+              try {
+                await signInWithPassword(email, password);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            <label className="field">
+              Email
+              <input
+                type="email"
+                autoComplete="username"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </label>
+            <label className="field">
+              Password
+              <input
+                type="password"
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </label>
+            <button className="button primary" disabled={!configured || loading || busy}>
+              {busy ? 'Signing in…' : 'Sign in with email'}
+            </button>
+          </form>
           <button
             onClick={() => void signIn()}
             disabled={!configured || loading}

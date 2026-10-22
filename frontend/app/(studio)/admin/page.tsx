@@ -1,5 +1,5 @@
-import { AdminPreview } from '@/components/AdminPreview';
+import { AdminConsole } from '@/components/AdminConsole';
 export const metadata = { title: 'Console preview · ReelCraft' };
 export default function Page() {
-  return <AdminPreview view="overview" />;
+  return <AdminConsole view="overview" />;
 }

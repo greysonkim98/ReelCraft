@@ -2,6 +2,7 @@ import type { RequestHandler, Response } from 'express';
 import { getAuth } from 'firebase-admin/auth';
 import { AppError } from '../lib/errors';
 import { getFirebaseApp } from '../lib/firebase';
+import { assertActiveUser, type UserStore } from './users';
 
 export interface AuthUser {
   uid: string;
@@ -26,15 +27,22 @@ export const bearerToken = (header: string | undefined): string | null => {
   return m ? m[1]! : null;
 };
 
-export function requireAuth(verifier: TokenVerifier): RequestHandler {
+export function requireAuth(verifier: TokenVerifier, users?: UserStore): RequestHandler {
   return async (req, res, next) => {
     const token = bearerToken(req.header('authorization'));
     if (!token) return next(new AppError(401, 'UNAUTHENTICATED', 'Sign in to use this feature.'));
     try {
       res.locals.user = await verifier.verify(token);
-      next();
     } catch {
-      next(new AppError(401, 'UNAUTHENTICATED', 'Your session is invalid or expired. Sign in again.'));
+      return next(
+        new AppError(401, 'UNAUTHENTICATED', 'Your session is invalid or expired. Sign in again.'),
+      );
+    }
+    try {
+      if (users) assertActiveUser(await users.get(currentUser(res).uid));
+      next();
+    } catch (error) {
+      next(error);
     }
   };
 }

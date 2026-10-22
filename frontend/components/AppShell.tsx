@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useAuth } from '@/lib/auth';
 import { Brand } from './ui/Brand';
 import { Icon, type IconName } from './ui/Icon';
-import { usePreviewRole } from './AdminPreview';
+import { canAccessAdminPage } from '@/lib/admin-access';
 const creatorLinks: { href: string; label: string; icon: IconName }[] = [
   { href: '/projects', label: 'My projects', icon: 'grid' },
   { href: '/styles', label: 'Style library', icon: 'sliders' },
@@ -23,7 +23,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   const admin = path.startsWith('/admin');
   const editor = path.startsWith('/editor');
   const NavLink = editor ? 'a' : Link;
-  const role = usePreviewRole();
   const [menuOpen, setMenuOpen] = useState(false);
   const [mobile, setMobile] = useState(false);
   const sidebarRef = useRef<HTMLElement>(null);
@@ -66,9 +65,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, [mobile, menuOpen]);
   const { user, role: accountRole, signOut } = useAuth();
   const links = admin
-    ? adminLinks.filter(
-        (link) => role === 'admin' || !['/admin/settings', '/admin/audit'].includes(link.href),
-      )
+    ? adminLinks.filter((link) => canAccessAdminPage(accountRole, link.href))
     : creatorLinks;
   const active = (href: string) => (href === '/admin' ? path === href : path.startsWith(href));
   return (
@@ -105,7 +102,13 @@ export function AppShell({ children }: { children: ReactNode }) {
           <span className="workspace-avatar">{admin ? 'RC' : 'YS'}</span>
           <div>
             <strong>{admin ? 'ReelCraft console' : 'Your studio'}</strong>
-            <span>{admin ? 'Administration preview' : 'A little footage. A great story.'}</span>
+            <span>
+              {path === '/admin/ips'
+                ? 'Network activity'
+                : admin
+                  ? 'Account & service management'
+                  : 'A little footage. A great story.'}
+            </span>
           </div>
         </div>
         <a href="/editor" className="button primary sidebar-create">
@@ -153,10 +156,10 @@ export function AppShell({ children }: { children: ReactNode }) {
             >
               <Icon name="settings" /> Account settings
             </NavLink>
-            {(admin || accountRole === 'admin') && (
+            {(admin || canAccessAdminPage(accountRole, '/admin')) && (
               <NavLink href={admin ? '/projects' : '/admin'} onClick={() => setMenuOpen(false)}>
                 <Icon name={admin ? 'grid' : 'shield'} />
-                {admin ? 'Back to studio' : 'Console preview'}
+                {admin ? 'Back to studio' : 'Management console'}
               </NavLink>
             )}
           </nav>
@@ -201,7 +204,12 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
           <div className="topbar-right">
             <span className="local-badge">
-              <span /> {admin ? 'Sample data' : 'Made on your device'}
+              <span />{' '}
+              {path === '/admin/ips'
+                ? 'Protected activity'
+                : admin
+                  ? 'Protected management'
+                  : 'Made on your device'}
             </span>
             <a href="/help" className="icon-button" aria-label="Help">
               <Icon name="help" size={19} />

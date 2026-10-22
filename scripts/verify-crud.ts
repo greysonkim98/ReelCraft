@@ -6,6 +6,7 @@
  *   npx tsx scripts/verify-crud.ts [http://localhost:4000]
  */
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import dotenv from 'dotenv';
 import { cert, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
@@ -17,7 +18,7 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 dotenv.config({ path: path.resolve(__dirname, '../frontend/.env.local') });
 if (!process.env.NEXT_PUBLIC_FIREBASE_API_KEY) {
   process.env.NEXT_PUBLIC_FIREBASE_API_KEY = dotenv.parse(
-    require('node:fs').readFileSync(path.resolve(__dirname, '../frontend/.env.local')),
+    readFileSync(path.resolve(__dirname, '../frontend/.env.local')),
   ).NEXT_PUBLIC_FIREBASE_API_KEY;
 }
 
@@ -61,15 +62,32 @@ async function call(token: string, method: string, route: string, body?: unknown
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await res.text();
-  return { status: res.status, body: text ? (JSON.parse(text) as Record<string, any>) : null };
+  return {
+    status: res.status,
+    body: text
+      ? (JSON.parse(text) as {
+          style?: unknown;
+          title?: unknown;
+          projects?: { id: string }[];
+        })
+      : null,
+  };
 }
 
 const style = { color: 'warm', subtitle: 'pop', tempo: 'calm', quality: '720p' };
 
 async function cleanup() {
-  await db.collection('projects').doc(PROJECT).delete().catch(() => undefined);
+  await db
+    .collection('projects')
+    .doc(PROJECT)
+    .delete()
+    .catch(() => undefined);
   for (const uid of [OWNER, OTHER]) {
-    await db.collection('users').doc(uid).delete().catch(() => undefined);
+    await db
+      .collection('users')
+      .doc(uid)
+      .delete()
+      .catch(() => undefined);
     await auth.deleteUser(uid).catch(() => undefined);
   }
 }
@@ -85,36 +103,54 @@ async function main() {
   let r = await call(owner, 'POST', '/me/session');
   check('session creates the profile', r.status === 200, r);
   const userDoc = await db.collection('users').doc(OWNER).get();
-  check('users/{uid} exists in Firestore with createdAt', userDoc.exists && !!userDoc.data()?.createdAt);
+  check(
+    'users/{uid} exists in Firestore with createdAt',
+    userDoc.exists && !!userDoc.data()?.createdAt,
+  );
 
   r = await call(owner, 'PUT', '/me/style', { style });
   check('PUT /me/style', r.status === 204, r);
-  check('style stored in Firestore', JSON.stringify((await db.collection('users').doc(OWNER).get()).data()?.style) === JSON.stringify(style));
+  check(
+    'style stored in Firestore',
+    JSON.stringify((await db.collection('users').doc(OWNER).get()).data()?.style) ===
+      JSON.stringify(style),
+  );
 
   r = await call(owner, 'POST', '/me/session');
-  check('session returns the saved style', JSON.stringify(r.body?.style) === JSON.stringify(style), r);
+  check(
+    'session returns the saved style',
+    JSON.stringify(r.body?.style) === JSON.stringify(style),
+    r,
+  );
 
   r = await call(owner, 'PUT', '/me/style', { style: { ...style, color: 'neon' } });
   check('invalid style is rejected', r.status === 400, r);
 
   // projects (seeded directly: the create path is the paid AI route)
-  await db.collection('projects').doc(PROJECT).set({
-    uid: OWNER,
-    title: 'Busan',
-    userPrompt: 'trip',
-    userMemos: [],
-    scenes: [],
-    script: { title: 'Busan', scenes: [] },
-    source: 'llm',
-    model: null,
-    stage: 'script_ready',
-    percent: 100,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  });
+  await db
+    .collection('projects')
+    .doc(PROJECT)
+    .set({
+      uid: OWNER,
+      title: 'Busan',
+      userPrompt: 'trip',
+      userMemos: [],
+      scenes: [],
+      script: { title: 'Busan', scenes: [] },
+      source: 'llm',
+      model: null,
+      stage: 'script_ready',
+      percent: 100,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
 
   r = await call(owner, 'GET', '/projects');
-  check('list returns my project (index works)', r.status === 200 && r.body?.projects.some((p: any) => p.id === PROJECT), r);
+  check(
+    'list returns my project (index works)',
+    r.status === 200 && !!r.body?.projects?.some((p) => p.id === PROJECT),
+    r,
+  );
 
   r = await call(owner, 'GET', `/projects/${PROJECT}`);
   check('get', r.status === 200 && r.body?.title === 'Busan', r);
@@ -130,12 +166,20 @@ async function main() {
   r = await call(other, 'GET', `/projects/${PROJECT}`);
   check("other user's get is 404", r.status === 404, r);
   r = await call(other, 'DELETE', `/projects/${PROJECT}`);
-  check("other user's delete is 404 and the doc survives", r.status === 404 && (await db.collection('projects').doc(PROJECT).get()).exists, r);
+  check(
+    "other user's delete is 404 and the doc survives",
+    r.status === 404 && (await db.collection('projects').doc(PROJECT).get()).exists,
+    r,
+  );
   r = await call(other, 'GET', '/projects');
-  check("other user's list is empty", r.status === 200 && r.body?.projects.length === 0, r);
+  check("other user's list is empty", r.status === 200 && r.body?.projects?.length === 0, r);
 
   r = await call(owner, 'DELETE', `/projects/${PROJECT}`);
-  check('delete', r.status === 204 && !(await db.collection('projects').doc(PROJECT).get()).exists, r);
+  check(
+    'delete',
+    r.status === 204 && !(await db.collection('projects').doc(PROJECT).get()).exists,
+    r,
+  );
 }
 
 main()

@@ -18,8 +18,8 @@ const envSchema = z.object({
     z.enum(['development', 'production', 'test']).default('development'),
   ),
   CLIENT_ORIGIN: z.preprocess(emptyToUndefined, z.string().default('http://localhost:3000')),
-  /** Number of reverse proxies in front of the app (Cloud Run behind Firebase Hosting: verify). */
-  TRUST_PROXY_HOPS: intWithDefault(1),
+  /** Trusted proxy hops: 0 for direct connections, 1 for the configured Render deployment. */
+  TRUST_PROXY_HOPS: intWithDefault(0),
 
   // Groq (checked when a request needs it, with a message naming the variable).
   GROQ_API_KEY: optionalString,
@@ -39,6 +39,19 @@ const envSchema = z.object({
   /** 0 disables the per-IP cap. */
   IP_DAILY_CAP: intWithDefault(DEFAULT_LIMITS.ipDailyCap),
   IP_HASH_SALT: optionalString,
+  IPINFO_TOKEN: optionalString,
+  /** Operator-maintained ASN watchlist; Lite does not report VPN/datacenter flags. */
+  IPINFO_FLAGGED_ASNS: z
+    .preprocess(emptyToUndefined, z.string().default(''))
+    .transform((value) =>
+      value
+        .split(',')
+        .map((asn) => asn.trim().toUpperCase())
+        .filter(Boolean),
+    )
+    .pipe(z.array(z.string().regex(/^AS\d+$/))),
+  /** Public Firebase web app ID, used to restrict App Check tokens to our frontend. */
+  FIREBASE_WEB_APP_ID: optionalString,
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -50,9 +63,17 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     throw new Error(`Invalid environment variables: ${names}`);
   }
   const env = parsed.data;
+  if ((env.IPINFO_TOKEN || env.IP_DAILY_CAP > 0) && !env.IP_HASH_SALT) {
+    throw new Error('IP_HASH_SALT is required when IPINFO_TOKEN or IP_DAILY_CAP is enabled.');
+  }
+  if (env.IPINFO_FLAGGED_ASNS.length && (!env.IPINFO_TOKEN || !env.FIREBASE_WEB_APP_ID)) {
+    throw new Error('IPINFO_TOKEN and FIREBASE_WEB_APP_ID are required for IPINFO_FLAGGED_ASNS.');
+  }
   if (env.NODE_ENV === 'production') {
     if (env.STORE === 'memory') {
-      throw new Error('STORE=memory is not allowed in production (counters would reset on every cold start).');
+      throw new Error(
+        'STORE=memory is not allowed in production (counters would reset on every cold start).',
+      );
     }
     if (!env.FIREBASE_PROJECT_ID) {
       throw new Error('FIREBASE_PROJECT_ID is required in production.');

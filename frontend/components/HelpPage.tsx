@@ -63,8 +63,8 @@ export function HelpPage() {
       <div className="preview-note">
         <Icon name="shield" />
         <p>
-          Looking around the admin console? Its users, activity, and settings are sample data for
-          reviewing the frontend. No preview action affects a real account.
+          The management console requires a support or admin role. Account changes and network
+          restrictions affect real access, and each change is recorded in the audit log.
         </p>
       </div>
     </>

@@ -12,7 +12,11 @@ import type { ProjectStore } from './services/projects';
 import { noopNotifier, type Notifier } from './services/realtime';
 import type { ScriptService } from './services/script';
 import type { UsageStore } from './services/usage';
+import { createIpInfoService, type IpInfoService } from './services/ipinfo';
+import { createMemoryNetworkStore, type NetworkStore } from './services/networks';
+import type { NetworkVerifier } from './services/networkVerification';
 import { createMemoryUserStore, type UserStore } from './services/users';
+import { createAdminStore, createMemoryAdminStorage, type AdminStore } from './services/admin';
 
 /** POST /ai/script can carry up to 3 grid JPEGs as base64. */
 const SCRIPT_BODY_LIMIT = '1mb';
@@ -26,11 +30,46 @@ export interface AppDeps {
   users?: UserStore;
   notifier?: Notifier;
   logger?: Logger;
+  ipinfo?: IpInfoService;
+  networks?: NetworkStore;
+  networkVerifier?: NetworkVerifier;
+  admin?: AdminStore;
 }
 
-export function createApp({ env, script, verifier, usage, projects, users, notifier, logger }: AppDeps): Express {
+export function createApp({
+  env,
+  script,
+  verifier,
+  usage,
+  projects,
+  users,
+  notifier,
+  logger,
+  ipinfo,
+  networks,
+  networkVerifier,
+  admin,
+}: AppDeps): Express {
   const log = logger ?? pino({ level: env.NODE_ENV === 'test' ? 'silent' : 'info' });
   const app = express();
+  const networkStore = networks ?? createMemoryNetworkStore();
+  const userStore = users ?? createMemoryUserStore();
+  const adminStore =
+    admin ??
+    createAdminStore(
+      createMemoryAdminStorage(
+        'all' in userStore
+          ? (userStore.all as Map<string, import('./services/users').UserRecord>)
+          : undefined,
+      ),
+      {
+        aiPerUserPerDay: env.AI_PER_USER_PER_DAY,
+        globalDailyAiCap: env.GLOBAL_DAILY_AI_CAP,
+        ipDailyCap: env.IP_DAILY_CAP,
+        maxClips: 10,
+        maxOutputSeconds: 60,
+      },
+    );
 
   app.set('trust proxy', env.TRUST_PROXY_HOPS);
   app.use(helmet());
@@ -77,10 +116,25 @@ export function createApp({ env, script, verifier, usage, projects, users, notif
       verifier,
       usage,
       projects,
-      users: users ??createMemoryUserStore(),
+      users: userStore,
+      admin: adminStore,
       notifier: notifier ?? noopNotifier,
-      limits: { perUser: env.AI_PER_USER_PER_DAY, global: env.GLOBAL_DAILY_AI_CAP, perIp: env.IP_DAILY_CAP },
+      limits: {
+        perUser: env.AI_PER_USER_PER_DAY,
+        global: env.GLOBAL_DAILY_AI_CAP,
+        perIp: env.IP_DAILY_CAP,
+      },
       ipHashSalt: env.IP_HASH_SALT,
+      ipinfo:
+        ipinfo ??
+        createIpInfoService({
+          token: env.IPINFO_TOKEN,
+          salt: env.IP_HASH_SALT,
+          cache: networkStore.cache,
+        }),
+      networks: networkStore,
+      flaggedAsns: env.IPINFO_FLAGGED_ASNS,
+      networkVerifier,
     }),
   );
 

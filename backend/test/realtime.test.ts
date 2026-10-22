@@ -6,16 +6,21 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createMemoryProjectStore } from '../src/services/projects';
 import { attachRealtime } from '../src/services/realtime';
 import { fakeVerifier, makeRequest } from './helpers';
+import { createMemoryUserStore, type UserStore } from '../src/services/users';
 
 let server: Server;
 let url: string;
 let notifier: ReturnType<typeof attachRealtime>;
-let limits: { idleMs?: number; maxMs?: number; maxConnections?: number } = {};
+let limits: { idleMs?: number; maxMs?: number; maxConnections?: number; users?: UserStore } = {};
 const projects = createMemoryProjectStore();
 const sockets: Socket[] = [];
 
 const open = (token?: string) => {
-  const s = connect(url, { auth: token ? { token } : {}, transports: ['websocket'], reconnection: false });
+  const s = connect(url, {
+    auth: token ? { token } : {},
+    transports: ['websocket'],
+    reconnection: false,
+  });
   sockets.push(s);
   return s;
 };
@@ -45,7 +50,13 @@ async function seed(id: string, uid: string) {
 
 beforeEach(async () => {
   server = createServer();
-  notifier = attachRealtime(server, { verifier: fakeVerifier, projects, origins: ['http://localhost:3000'], logger: pino({ level: 'silent' }), ...limits });
+  notifier = attachRealtime(server, {
+    verifier: fakeVerifier,
+    projects,
+    origins: ['http://localhost:3000'],
+    logger: pino({ level: 'silent' }),
+    ...limits,
+  });
   await new Promise<void>((r) => server.listen(0, r));
   url = `http://localhost:${(server.address() as AddressInfo).port}`;
   projects.all.clear();
@@ -61,7 +72,13 @@ const restart = async (l: typeof limits) => {
   await notifier.io.close();
   limits = l;
   server = createServer();
-  notifier = attachRealtime(server, { verifier: fakeVerifier, projects, origins: ['http://localhost:3000'], logger: pino({ level: 'silent' }), ...limits });
+  notifier = attachRealtime(server, {
+    verifier: fakeVerifier,
+    projects,
+    origins: ['http://localhost:3000'],
+    logger: pino({ level: 'silent' }),
+    ...limits,
+  });
   await new Promise<void>((r) => server.listen(0, r));
   url = `http://localhost:${(server.address() as AddressInfo).port}`;
 };
@@ -85,7 +102,10 @@ describe('realtime cost guard', () => {
     const s = open('good-alice');
     await connected(s);
     const expired = once<{ reason: string }>(s, 'session:expired');
-    const beat = setInterval(() => s.emit('project:progress', { projectId: 'p1', stage: 'rendering', percent: 1 }), 80);
+    const beat = setInterval(
+      () => s.emit('project:progress', { projectId: 'p1', stage: 'rendering', percent: 1 }),
+      80,
+    );
     const started = Date.now();
     const { reason } = await expired;
     clearInterval(beat);
@@ -108,6 +128,27 @@ describe('realtime cost guard', () => {
 });
 
 describe('realtime', () => {
+  it('rejects restricted accounts and disconnects an existing socket after suspension', async () => {
+    const users = createMemoryUserStore({
+      alice: { role: 'user' },
+      bob: { role: 'user', deletedAt: Date.now() },
+    });
+    await restart({ users });
+    await seed('restricted-project', 'alice');
+    await expect(connected(open('good-bob'))).rejects.toThrow(/UNAUTHENTICATED/);
+    const socket = open('good-alice');
+    await connected(socket);
+    users.all.set('alice', { role: 'user', suspendedUntil: Date.now() + 60000 });
+    const gone = disconnected(socket);
+    const result = await emitAck(socket, 'project:progress', {
+      projectId: 'restricted-project',
+      stage: 'rendering',
+      percent: 30,
+    });
+    expect(result).toEqual({ ok: false, code: 'ACCOUNT_SUSPENDED' });
+    await gone;
+    expect((await projects.get('restricted-project'))?.stage).toBe('script_ready');
+  });
   it('rejects a connection without a valid token', async () => {
     await expect(connected(open())).rejects.toThrow(/UNAUTHENTICATED/);
     await expect(connected(open('bad'))).rejects.toThrow(/UNAUTHENTICATED/);
@@ -124,7 +165,11 @@ describe('realtime', () => {
     stranger.on('project:progress', (e) => seen.push(e));
     const onLaptop = once<{ stage: string; percent: number }>(laptop, 'project:progress');
 
-    const ack = await emitAck(phone, 'project:progress', { projectId: 'p1', stage: 'rendering', percent: 42 });
+    const ack = await emitAck(phone, 'project:progress', {
+      projectId: 'p1',
+      stage: 'rendering',
+      percent: 42,
+    });
     expect(ack.ok).toBe(true);
     expect(await onLaptop).toMatchObject({ stage: 'rendering', percent: 42 });
     expect(seen).toHaveLength(0);
@@ -134,7 +179,8 @@ describe('realtime', () => {
     await seed('p1', 'alice');
     const s = open('good-alice');
     await connected(s);
-    for (const percent of [10, 20, 30]) await emitAck(s, 'project:progress', { projectId: 'p1', stage: 'rendering', percent });
+    for (const percent of [10, 20, 30])
+      await emitAck(s, 'project:progress', { projectId: 'p1', stage: 'rendering', percent });
     // first event stored stage + percent, the next two only went to other devices
     expect(projects.all.get('p1')).toMatchObject({ stage: 'rendering', percent: 10 });
     await emitAck(s, 'project:progress', { projectId: 'p1', stage: 'done', percent: 100 });
@@ -145,8 +191,12 @@ describe('realtime', () => {
     await seed('p1', 'alice');
     const bob = open('good-bob');
     await connected(bob);
-    expect(await emitAck(bob, 'project:progress', { projectId: 'p1', stage: 'rendering', percent: 1 })).toEqual({ ok: false, code: 'NOT_FOUND' });
-    expect(await emitAck(bob, 'project:progress', { projectId: 'p1', stage: 'nope', percent: 1 })).toEqual({ ok: false, code: 'VALIDATION_ERROR' });
+    expect(
+      await emitAck(bob, 'project:progress', { projectId: 'p1', stage: 'rendering', percent: 1 }),
+    ).toEqual({ ok: false, code: 'NOT_FOUND' });
+    expect(
+      await emitAck(bob, 'project:progress', { projectId: 'p1', stage: 'nope', percent: 1 }),
+    ).toEqual({ ok: false, code: 'VALIDATION_ERROR' });
     expect(projects.all.get('p1')!.stage).toBe('script_ready');
   });
 
@@ -155,7 +205,9 @@ describe('realtime', () => {
     const s = open('good-alice');
     await connected(s);
     const acks = await Promise.all(
-      Array.from({ length: 15 }, (_, i) => emitAck(s, 'project:progress', { projectId: 'p1', stage: 'rendering', percent: i })),
+      Array.from({ length: 15 }, (_, i) =>
+        emitAck(s, 'project:progress', { projectId: 'p1', stage: 'rendering', percent: i }),
+      ),
     );
     expect(acks.filter((a) => a.code === 'RATE_LIMITED').length).toBeGreaterThanOrEqual(5);
   });

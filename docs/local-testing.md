@@ -1,4 +1,31 @@
-# 로컬에서 돌려 보기
+# Local testing
+
+## Current setup: real Firebase Authentication and Firestore
+
+Use this workflow for existing Firebase accounts and the management console. Keep the configured `.env` files; do not overwrite them with the example. In `frontend/.env.local`, use `NEXT_PUBLIC_API_URL=http://localhost:4000` and leave `NEXT_PUBLIC_AUTH_EMULATOR` empty. The root `.env` should use `STORE=firestore`, `PORT=4000`, and `CLIENT_ORIGIN=http://localhost:3000`.
+
+Run these commands from the repository root in two separate PowerShell terminals:
+
+```powershell
+# Terminal 1: backend (clear any emulator overrides from earlier testing)
+Remove-Item Env:FIREBASE_AUTH_EMULATOR_HOST -ErrorAction SilentlyContinue
+Remove-Item Env:FIRESTORE_EMULATOR_HOST -ErrorAction SilentlyContinue
+npm.cmd run dev:backend
+```
+
+```powershell
+# Terminal 2: frontend
+Remove-Item Env:NEXT_PUBLIC_AUTH_EMULATOR -ErrorAction SilentlyContinue
+npm.cmd run dev:frontend
+```
+
+Open `http://localhost:3000/login` and use your existing Firebase account. Do not start the Auth emulator for this workflow. Firestore access requires the configured local Google credentials.
+
+If a port is already occupied, reuse or stop the existing server before starting another. The frontend stays on port 3000 to match the backend's allowed origin. The API health URL, `http://localhost:4000/api/v1/health`, must return JSON. If it returns HTML and login reports `Request failed (404)`, check for an old Firebase Emulator UI on port 4000. Stop that emulator; the updated `firebase.json` puts its UI on port 4002 on the next start.
+
+## Optional isolated Auth emulator workflow
+
+The instructions below use emulator accounts, which are separate from real Firebase accounts. Set `STORE=memory` for these Auth-only tests; they do not exercise persistent Firestore management. Restore the real-Firebase settings above before signing in with an existing account.
 
 PowerShell 기준입니다. Google 로그인 없이 **Auth 에뮬레이터**로 전체 흐름을 확인합니다.
 

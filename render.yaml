@@ -4,34 +4,46 @@ services:
   - type: web
     name: reelcraft-api
     runtime: node
+    branch: DanielPrice
     plan: free
     region: oregon
     buildCommand: npm ci && npm run build -w shared && npm run build -w backend
     startCommand: node backend/dist/index.js
     healthCheckPath: /api/v1/health
-    autoDeploy: false
+    autoDeployTrigger: off
     envVars:
       - key: NODE_ENV
         value: production
+      - key: STORE
+        value: firestore
       - key: FIREBASE_PROJECT_ID
         value: reelcraft-4a7a7
+      - key: FIREBASE_WEB_APP_ID
+        value: 1:410338139407:web:207463f6f388cf7c94327a
+      # Enable only after verifying App Check on the deployed /verify page.
+      - key: IPINFO_FLAGGED_ASNS
+        value: ''
       # Firebase Hosting origins that may call the API, comma separated
       - key: CLIENT_ORIGIN
         value: https://reelcraft-4a7a7.web.app,https://reelcraft-4a7a7.firebaseapp.com
       - key: TRUST_PROXY_HOPS
-        value: "1"
+        value: '1'
       - key: GROQ_MODEL
         value: openai/gpt-oss-20b
       - key: GROQ_FALLBACK_MODEL
         value: openai/gpt-oss-120b
       - key: AI_PER_USER_PER_DAY
-        value: "3"
+        value: '3'
       - key: GLOBAL_DAILY_AI_CAP
-        value: "60"
+        value: '60'
       - key: IP_DAILY_CAP
-        value: "0"
+        value: '0'
       # Secrets: paste them in the Render dashboard, never commit them
       - key: GROQ_API_KEY
         sync: false
       - key: FIREBASE_SERVICE_ACCOUNT_JSON
         sync: false
+      - key: IPINFO_TOKEN
+        sync: false
+      - key: IP_HASH_SALT
+        generateValue: true
