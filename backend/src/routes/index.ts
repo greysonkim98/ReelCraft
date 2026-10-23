@@ -49,10 +49,13 @@ const DAILY_LIMIT_MESSAGES = {
 export function createApiRouter(deps: RouterDeps): Router {
   const router = Router();
   const auth = requireAuth(deps.verifier, deps.users);
-  const liveLimits = async () => {
+  const liveLimits = async (uid: string) => {
     const { limits } = await deps.admin.getSettings();
+    const isAdmin = (await deps.users.get(uid))?.role === 'admin';
     return {
-      perUser: limits.aiPerUserPerDay,
+      perUser: isAdmin
+        ? (await deps.admin.getAdminLimits()).aiPerUserPerDay
+        : limits.aiPerUserPerDay,
       global: limits.globalDailyAiCap,
       perIp: limits.ipDailyCap,
     };
@@ -77,7 +80,8 @@ export function createApiRouter(deps: RouterDeps): Router {
 
   router.get('/me/usage', auth, async (_req, res, next) => {
     try {
-      res.json(await deps.usage.get(currentUser(res).uid, utcDay(), await liveLimits()));
+      const { uid } = currentUser(res);
+      res.json(await deps.usage.get(uid, utcDay(), await liveLimits(uid)));
     } catch (err) {
       next(err);
     }
@@ -256,11 +260,7 @@ export function createApiRouter(deps: RouterDeps): Router {
             'RUNTIME_LIMIT',
             `Selected scenes exceed the current ${runtime.maxOutputSeconds}-second reel limit.`,
           );
-        const limits = {
-          perUser: runtime.aiPerUserPerDay,
-          global: runtime.globalDailyAiCap,
-          perIp: runtime.ipDailyCap,
-        };
+        const limits = await liveLimits(uid);
         hash = limits.perIp > 0 ? ipHash(req) : undefined;
         const spend = await deps.usage.consume(uid, day, limits, hash);
         if (!spend.ok) {

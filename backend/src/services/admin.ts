@@ -1,14 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { FieldPath, getFirestore, Timestamp } from 'firebase-admin/firestore';
-import type {
-  AdminPage,
-  AdminUser,
-  AuditEntry,
-  NetworkAction,
-  NetworkRestriction,
-  RuntimeLimits,
-  RuntimeSettings,
-  UserAction,
+import {
+  DEFAULT_LIMITS,
+  type AdminPage,
+  type AdminUser,
+  type AuditEntry,
+  type NetworkAction,
+  type NetworkRestriction,
+  type RuntimeLimits,
+  type RuntimeSettings,
+  type UserAction,
 } from '@reelcraft/shared';
 import { AppError } from '../lib/errors';
 import { getFirebaseApp } from '../lib/firebase';
@@ -122,6 +123,16 @@ export function createAdminStore(storage: AdminStorage, defaults: RuntimeLimits)
     storage,
     async authorize(uid: string, adminOnly = false) {
       assertOperator(await storage.get(`users/${uid}`), adminOnly);
+    },
+    /** runtimeConfig/adminLimits: `{ aiPerUserPerDay: number }`, edited in the Firebase console. */
+    async getAdminLimits(): Promise<{ aiPerUserPerDay: number }> {
+      const value = (await storage.get('runtimeConfig/adminLimits'))?.aiPerUserPerDay;
+      return {
+        aiPerUserPerDay:
+          typeof value === 'number' && Number.isInteger(value) && value >= 0
+            ? value
+            : DEFAULT_LIMITS.adminAiPerUserPerDay,
+      };
     },
     async getSettings() {
       return settings(await storage.get('runtimeConfig/limits'));

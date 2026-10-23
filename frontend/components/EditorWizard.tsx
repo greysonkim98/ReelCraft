@@ -8,6 +8,9 @@ import {
   SCENE_MAX_SECONDS,
   SUBTITLE_STYLES,
   TEMPOS,
+  VOICES,
+  VOICE_SPEED,
+  DEFAULT_VOICE_ID,
   USER_MEMOS_MAX_COUNT,
   USER_PROMPT_MAX_CHARS,
   computeMaxChars,
@@ -15,6 +18,7 @@ import {
   type Segment,
   type Style,
   type UsageInfo,
+  type Voice,
 } from '@reelcraft/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
@@ -22,11 +26,12 @@ import { Icon } from './ui/Icon';
 import { ApiError, generateScript, getHealth, getUsage, getRuntimeSettings } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { analyzeClips, type AnalyzeProgress } from '@/lib/ffmpeg/analyze';
-import { RenderMemoryError, encodeVideo } from '@/lib/ffmpeg/encode';
+import { RenderMemoryError, encodeVideo, type NarrationInput } from '@/lib/ffmpeg/encode';
 import { CancelledError, cancelFFmpeg } from '@/lib/ffmpeg/loader';
 import { buildSceneGrids, evenlySpaced } from '@/lib/ffmpeg/sampleFrames';
 import { computeFingerprint } from '@/lib/fingerprint';
 import { readClipInfo } from '@/lib/media';
+import { previewVoice, synthesizeLine } from '@/lib/tts';
 import { createProgressReporter, type ProgressReporter } from '@/lib/realtime';
 
 interface ClipItem {
@@ -38,12 +43,13 @@ interface ClipItem {
   note: string;
 }
 
-const STEPS = ['Clips', 'Style', 'Analyze', 'Captions', 'Review', 'Render', 'Share'] as const;
+const STEPS = ['Clips', 'Style', 'Analyze', 'Captions', 'Voice', 'Review', 'Render', 'Share'] as const;
 const STAGE_DESCRIPTIONS = [
   'Start with the moments you want to keep.',
   'Set the mood. Make it feel like you.',
   'Find the little moments that tell a bigger story.',
   'A few words can bring your story to life.',
+  'Pick who reads your story.',
   'Fine-tune your scenes and make every word count.',
   'Bring it all together, right on your device.',
   'Your story is ready for the world.',
@@ -148,6 +154,16 @@ export function EditorWizard() {
     tempo: 'energetic',
     quality: '720p',
   });
+
+  const [voice, setVoice] = useState<Voice>({
+    enabled: false,
+    voiceId: DEFAULT_VOICE_ID,
+    speed: VOICE_SPEED.default,
+  });
+  const [voiceStatus, setVoiceStatus] = useState<{ busy: boolean; label?: string; fraction?: number; error?: string }>({
+    busy: false,
+  });
+  const [voiceSample, setVoiceSample] = useState<string | null>(null);
 
   const [segments, setSegments] = useState<Segment[]>([]);
   const [unusedClips, setUnusedClips] = useState<number[]>([]);
@@ -500,6 +516,89 @@ export function EditorWizard() {
     setUnusedClips((prev) => prev.filter((i) => i !== clipIndex));
   }
 
+  // ---------- narration (voice step, review and render share one cache) ----------
+  const narrRef = useRef(new Map<string, { wav: Uint8Array; durationSec: number; url: string }>());
+  const [narrVersion, setNarrVersion] = useState(0);
+  const narrKey = (text: string) => `${voice.voiceId}|${voice.speed}|${text.trim()}`;
+  const hasNarration = (text: string) => narrRef.current.has(narrKey(text));
+  const spokenSegments = segments.filter((x) => x.subtitle.trim());
+  const narrationReady =
+    narrVersion >= 0 && spokenSegments.length > 0 && spokenSegments.every((x) => hasNarration(x.subtitle));
+
+  async function ensureNarration(
+    signal?: AbortSignal,
+    notify?: (message: string) => void,
+    only?: Segment[],
+  ): Promise<NarrationInput[]> {
+    const controller = new AbortController();
+    if (!signal) abortRef.current = controller;
+    const sig = signal ?? controller.signal;
+    const targets = (only ?? segments).filter((x) => x.subtitle.trim());
+    const missing = [...new Set(targets.filter((x) => !hasNarration(x.subtitle)).map((x) => x.subtitle.trim()))];
+    const status = (fraction: number, label: string) => {
+      setVoiceStatus({ busy: true, label, fraction });
+      notify?.(label);
+    };
+    try {
+      for (const [i, text] of missing.entries()) {
+        if (sig.aborted) throw new CancelledError();
+        status(i / missing.length, `Generating narration ${i + 1}/${missing.length}…`);
+        report('tts', (i / missing.length) * 100, `Narration ${i + 1}/${missing.length}`);
+        const line = await synthesizeLine(text, {
+          voiceId: voice.voiceId,
+          speed: voice.speed,
+          onModelProgress: (f) => status(f, `Downloading voice model… ${Math.round(f * 100)}%`),
+        });
+        narrRef.current.set(narrKey(text), {
+          ...line,
+          url: URL.createObjectURL(new Blob([line.wav as Uint8Array<ArrayBuffer>], { type: 'audio/wav' })),
+        });
+        setNarrVersion((v) => v + 1);
+      }
+      if (missing.length > 0) report('tts', 100);
+      setVoiceStatus({ busy: false });
+      notify?.('');
+    } catch (err) {
+      setVoiceStatus({
+        busy: false,
+        error: err instanceof CancelledError ? undefined : `Narration failed: ${(err as Error).message}`,
+      });
+      report('failed', 0);
+      throw err;
+    }
+    return targets.map((x) => {
+      const n = narrRef.current.get(narrKey(x.subtitle))!;
+      return { segmentId: x.id, wav: n.wav, durationSec: n.durationSec };
+    });
+  }
+
+  async function listen(seg: Segment) {
+    try {
+      await ensureNarration(undefined, undefined, [seg]);
+    } catch {
+      return;
+    }
+    const n = narrRef.current.get(narrKey(seg.subtitle));
+    if (n) void new Audio(n.url).play().catch(() => undefined);
+  }
+
+  async function playSample() {
+    setVoiceStatus({ busy: true, label: 'Loading voice model…' });
+    try {
+      const url = await previewVoice(voice.voiceId, voice.speed, (f) =>
+        setVoiceStatus({ busy: true, label: `Downloading voice model… ${Math.round(f * 100)}%` }),
+      );
+      setVoiceSample((old) => {
+        if (old) URL.revokeObjectURL(old);
+        return url;
+      });
+      setVoiceStatus({ busy: false });
+      void new Audio(url).play().catch(() => undefined);
+    } catch (err) {
+      setVoiceStatus({ busy: false, error: `Could not load the voice model: ${(err as Error).message}` });
+    }
+  }
+
   // ---------- step 6: render ----------
   async function runRender() {
     const controller = new AbortController();
@@ -516,11 +615,16 @@ export function EditorWizard() {
         throw new Error(
           `This project exceeds the current limits: ${currentLimits.maxClips} clips and ${currentLimits.maxOutputSeconds} seconds.`,
         );
+      const narration = voice.enabled
+        ? await ensureNarration(controller.signal, (notice) => setRender((r) => ({ ...r, notice: notice || undefined })))
+        : [];
+      setRender((r) => ({ ...r, notice: undefined }));
       const blob = await encodeVideo({
         files: clips.map((c) => c.file),
         hasAudio,
         segments,
         style,
+        narration,
         signal: controller.signal,
         onNotice: (notice) => setRender((r) => ({ ...r, notice })),
         onProgress: ({ fraction, etaSeconds }) => {
@@ -531,7 +635,7 @@ export function EditorWizard() {
       setOutput({ url: URL.createObjectURL(blob), blob });
       setRender({ running: false, fraction: 1 });
       report('done', 100);
-      goto(7);
+      goto(8);
     } catch (err) {
       report('failed', 0);
       if (err instanceof CancelledError)
@@ -570,8 +674,8 @@ export function EditorWizard() {
   const nextDisabled =
     clips.length === 0 ||
     (step >= 3 && segments.length === 0) ||
-    (step === 5 && overLimit) ||
-    (step === 6 && !output);
+    (step === 6 && overLimit) ||
+    (step === 7 && !output);
 
   return (
     <div className="editor-workspace">
@@ -896,18 +1000,6 @@ export function EditorWizard() {
               <p className="text-xs text-slate-500">
                 The video is exported as 720×1280 (9:16), the Instagram Reels format.
               </p>
-              <div className="planned-feature">
-                <Icon name="volume" />
-                <div>
-                  <strong>
-                    AI narration <span className="count-pill">Coming later</span>
-                  </strong>
-                  <p>
-                    Voice selection and narration are planned. Your original clip audio is used in
-                    this version.
-                  </p>
-                </div>
-              </div>
             </section>
           )}
 
@@ -1104,6 +1196,114 @@ export function EditorWizard() {
           {step === 5 && (
             <section aria-labelledby="s5" className="space-y-4">
               <h2 id="s5" className="text-lg font-semibold">
+                Choose a voice
+              </h2>
+              <p className="text-sm text-slate-600">
+                Narration reads your captions aloud. You can listen to each scene in the next step.
+              </p>
+              <fieldset className="space-y-2">
+                <legend className="sr-only">AI narration</legend>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={voice.enabled}
+                    onChange={(e) => {
+                      setVoice({ ...voice, enabled: e.target.checked });
+                      setOutput(null);
+                    }}
+                  />
+                  Read the captions aloud (mixed over your clip audio)
+                </label>
+                {voice.enabled && (
+                  <div className="space-y-3">
+                    {(['female', 'male'] as const).map((g) => (
+                      <div key={g} className="space-y-1">
+                        <div className="text-xs font-medium capitalize text-slate-500">{g}</div>
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                          {VOICES.filter((v) => v.gender === g).map((v) => (
+                            <Card
+                              key={v.id}
+                              selected={voice.voiceId === v.id}
+                              onClick={() => {
+                                setVoice({ ...voice, voiceId: v.id });
+                                setOutput(null);
+                              }}
+                            >
+                              <div className="font-medium">{v.label}</div>
+                              <div className="text-xs text-slate-500">{v.accent} accent</div>
+                            </Card>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                    <label className="block text-sm">
+                      Speed {voice.speed.toFixed(1)}×
+                      <input
+                        type="range"
+                        className="block w-full"
+                        min={VOICE_SPEED.min}
+                        max={VOICE_SPEED.max}
+                        step={0.1}
+                        value={voice.speed}
+                        onChange={(e) => {
+                          setVoice({ ...voice, speed: Number(e.target.value) });
+                          setOutput(null);
+                        }}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => void playSample()}
+                      disabled={voiceStatus.busy}
+                      className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium disabled:opacity-40"
+                    >
+                      {voiceStatus.busy ? (voiceStatus.label ?? 'Loading…') : 'Play sample'}
+                    </button>
+                    {voiceStatus.error && (
+                      <p role="alert" className="text-xs text-rose-700">
+                        {voiceStatus.error}
+                      </p>
+                    )}
+                    <p className="text-xs text-slate-500">
+                      The voice runs in your browser. The first use downloads a ~90 MB model; narration is
+                      generated when you render.
+                    </p>
+                  </div>
+                )}
+              </fieldset>
+              {voice.enabled && (
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => void ensureNarration().catch(() => undefined)}
+                    disabled={voiceStatus.busy || spokenSegments.length === 0}
+                    className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+                  >
+                    {narrationReady ? 'Narration ready' : 'Generate narration'}
+                  </button>
+                  {spokenSegments.length === 0 && (
+                    <p className="text-xs text-slate-500">Write captions first, then narration can be generated.</p>
+                  )}
+                  {voiceStatus.busy && (
+                    <>
+                      <ProgressBar value={voiceStatus.fraction ?? 0} label={voiceStatus.label ?? ''} />
+                      <button
+                        type="button"
+                        onClick={cancelJob}
+                        className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white"
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </section>
+          )}
+
+          {step === 6 && (
+            <section aria-labelledby="s6" className="space-y-4">
+              <h2 id="s6" className="text-lg font-semibold">
                 Review and edit
               </h2>
               <div
@@ -1206,6 +1406,16 @@ export function EditorWizard() {
                       >
                         {s.subtitle.length}/{s.maxChars}
                       </div>
+                      {voice.enabled && s.subtitle.trim() && (
+                        <button
+                          type="button"
+                          onClick={() => void listen(s)}
+                          disabled={voiceStatus.busy}
+                          className="mt-1 rounded bg-slate-100 px-2 py-1 text-xs font-medium disabled:opacity-40"
+                        >
+                          {hasNarration(s.subtitle) ? '▶ Listen' : '▶ Generate & listen'}
+                        </button>
+                      )}
                     </div>
                   </li>
                 ))}
@@ -1232,9 +1442,9 @@ export function EditorWizard() {
             </section>
           )}
 
-          {step === 6 && (
-            <section aria-labelledby="s6" className="space-y-4">
-              <h2 id="s6" className="text-lg font-semibold">
+          {step === 7 && (
+            <section aria-labelledby="s7" className="space-y-4">
+              <h2 id="s7" className="text-lg font-semibold">
                 Render
               </h2>
               <p className="text-sm text-slate-600">
@@ -1285,9 +1495,9 @@ export function EditorWizard() {
             </section>
           )}
 
-          {step === 7 && (
-            <section aria-labelledby="s7" className="space-y-4">
-              <h2 id="s7" className="text-lg font-semibold">
+          {step === 8 && (
+            <section aria-labelledby="s8" className="space-y-4">
+              <h2 id="s8" className="text-lg font-semibold">
                 Share or download
               </h2>
               {output ? (
@@ -1299,22 +1509,21 @@ export function EditorWizard() {
                     className="mx-auto max-h-[70vh] rounded-xl bg-black"
                   />
                   <div className="text-xs text-slate-500">{fmtBytes(output.blob.size)}</div>
-                  {canShare ? (
+                  <a
+                    href={output.url}
+                    download={fileName}
+                    className="block w-full rounded-xl bg-slate-900 px-4 py-3 text-center font-semibold text-white"
+                  >
+                    Download ({fileName})
+                  </a>
+                  {canShare && (
                     <button
                       type="button"
                       onClick={() => void share()}
-                      className="w-full rounded-xl bg-slate-900 px-4 py-3 font-semibold text-white"
+                      className="w-full rounded-xl bg-slate-200 px-4 py-3 text-sm font-semibold"
                     >
                       Share video
                     </button>
-                  ) : (
-                    <a
-                      href={output.url}
-                      download={fileName}
-                      className="block w-full rounded-xl bg-slate-900 px-4 py-3 text-center font-semibold text-white"
-                    >
-                      Download ({fileName})
-                    </a>
                   )}
                 </>
               ) : (
@@ -1388,7 +1597,7 @@ export function EditorWizard() {
         </a>
       </footer>
 
-      {step < 7 && (
+      {step < 8 && (
         <div className="editor-actionbar">
           <div className="editor-actionbar-inner">
             <button
@@ -1407,7 +1616,7 @@ export function EditorWizard() {
               onClick={() => goto(step + 1)}
               className="flex-1 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
             >
-              {step === 6 ? 'View your reel' : `Continue to ${STEPS[step]?.toLowerCase()}`}{' '}
+              {step === 7 ? 'View your reel' : `Continue to ${STEPS[step]?.toLowerCase()}`}{' '}
               <Icon name="arrow" size={16} />
             </button>
           </div>

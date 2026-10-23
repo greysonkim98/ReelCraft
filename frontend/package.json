@@ -18,6 +18,7 @@
     "@ffmpeg/ffmpeg": "0.12.15",
     "@reelcraft/shared": "*",
     "firebase": "^12.19.0",
+    "kokoro-js": "^1.2.1",
     "next": "^15.5.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

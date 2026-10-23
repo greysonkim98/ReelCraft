@@ -40,6 +40,7 @@ export interface ScriptServiceConfig {
 export const SYSTEM_PROMPT = `You write the on-screen lines for an Instagram Reels / Shorts video made from a user's phone clips. The lines work like short song lyrics: punchy, rhythmic, easy to read in a second or two, one idea per scene, and when the topic is a product they are an ad that makes the viewer want it.
 Rules:
 - Respond with a single JSON object: a short title plus one entry per scene, in the given order. Write in English.
+- Use exactly this shape: {"title": string, "scenes": [{"scene_id": string, "caption": string, "voiceover": string | null, "location_text": string | null}]}. The "scenes" array is required; never use scene ids as keys.
 - The scenes form ONE continuous story from the first scene to the last.
 - userPrompt is the topic of the reel (for example a product or place to introduce). Every line must serve that topic.
 - You may be given images: grids whose labeled cells are frames of the scenes (the scene_id is printed on each cell). Look at what each scene really shows, then write its line so it matches the picture and serves the topic. Do not narrate what is visible: say what the viewer should feel or learn at that moment, and let the lines build on one another from the first scene to the last.
@@ -226,8 +227,20 @@ export function validateResponse(content: string, input: ScriptRequest, expected
     out.structural = true;
     return out;
   }
+  // JSON mode has no schema, so a model may key the lines by scene_id instead of using a "scenes" array.
+  if (raw && typeof raw === 'object' && !Array.isArray(raw) && !('scenes' in raw)) {
+    const obj = raw as Record<string, unknown>;
+    const keyed = expected.filter((s) => obj[s.scene_id] && typeof obj[s.scene_id] === 'object');
+    if (keyed.length > 0) {
+      raw = {
+        title: typeof obj.title === 'string' ? obj.title : '',
+        scenes: keyed.map((s) => ({ voiceover: null, location_text: null, ...(obj[s.scene_id] as object), scene_id: s.scene_id })),
+      };
+    }
+  }
   const parsed = llmOutputSchema.safeParse(raw);
   if (!parsed.success) {
+    console.warn(`[script] schema mismatch: ${parsed.error.message.slice(0, 800)}`);
     out.structural = true;
     return out;
   }
@@ -351,13 +364,15 @@ export function createScriptService(config: ScriptServiceConfig): ScriptService 
       let content: string;
       try {
         content = await callModel(model, messages, input.scenes.length, withImages);
-      } catch {
+      } catch (err) {
+        console.warn(`[script] ${model} call failed, using fallback: ${(err as Error).message}`);
         // No answer came back, so nothing was spent upstream: memo/tag based script, calls = 0.
         return { script: buildFallbackScript(input), source: 'fallback', model: null, calls: 0, repairedScenes: [] };
       }
 
       const checked = validateResponse(content, input, input.scenes);
       if (checked.structural) {
+        console.warn(`[script] ${model} answer failed structure check, using fallback. Raw (first 800 chars): ${content.slice(0, 800)}`);
         return { script: buildFallbackScript(input), source: 'fallback', model: null, calls: 1, repairedScenes: [] };
       }
 

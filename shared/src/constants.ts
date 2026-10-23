@@ -7,11 +7,20 @@ export const QUALITIES = ['720p'] as const;
 export const SUBTITLE_LANGUAGES = ['en'] as const;
 
 export const VOICES = [
-  { id: 'af_heart', label: 'Heart (US, female)' },
-  { id: 'am_michael', label: 'Michael (US, male)' },
-  { id: 'bf_emma', label: 'Emma (UK, female)' },
-  { id: 'bm_george', label: 'George (UK, male)' },
+  { id: 'af_heart', label: 'Heart', accent: 'US', gender: 'female' },
+  { id: 'af_bella', label: 'Bella', accent: 'US', gender: 'female' },
+  { id: 'af_nicole', label: 'Nicole', accent: 'US', gender: 'female' },
+  { id: 'af_sarah', label: 'Sarah', accent: 'US', gender: 'female' },
+  { id: 'af_sky', label: 'Sky', accent: 'US', gender: 'female' },
+  { id: 'am_michael', label: 'Michael', accent: 'US', gender: 'male' },
+  { id: 'am_adam', label: 'Adam', accent: 'US', gender: 'male' },
+  { id: 'am_puck', label: 'Puck', accent: 'US', gender: 'male' },
+  { id: 'bf_emma', label: 'Emma', accent: 'UK', gender: 'female' },
+  { id: 'bf_isabella', label: 'Isabella', accent: 'UK', gender: 'female' },
+  { id: 'bm_george', label: 'George', accent: 'UK', gender: 'male' },
+  { id: 'bm_lewis', label: 'Lewis', accent: 'UK', gender: 'male' },
 ] as const;
+export const DEFAULT_VOICE_ID = 'af_heart' as const;
 
 export const VOICE_SPEED = { min: 0.8, max: 1.2, default: 1.0 } as const;
 
@@ -49,6 +58,8 @@ export const DEFAULT_LIMITS = {
   maxClipSeconds: 600,
   maxOutputSeconds: 60,
   aiPerUserPerDay: 3,
+  /** Per-account AI quota for admins. Still counts against globalDailyAiCap. */
+  adminAiPerUserPerDay: 100,
   ttsDailyLines: 30,
   /** 0 disables the per-IP cap (needs a verified proxy setup first). */
   ipDailyCap: 0,

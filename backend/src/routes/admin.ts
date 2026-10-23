@@ -75,17 +75,18 @@ export function createAdminRouter(
       );
       const result = await store.listUsers(query.limit, query.cursor, query.search, query.status);
       const settings = await store.getSettings();
-      const limits = {
-        perUser: settings.limits.aiPerUserPerDay,
+      const adminLimits = await store.getAdminLimits();
+      const limitsFor = (role: string) => ({
+        perUser: role === 'admin' ? adminLimits.aiPerUserPerDay : settings.limits.aiPerUserPerDay,
         global: settings.limits.globalDailyAiCap,
         perIp: settings.limits.ipDailyCap,
-      };
+      });
       res.json({
         ...result,
         items: await Promise.all(
           result.items.map(async (user) => ({
             ...user,
-            aiUsedToday: (await usage.get(user.uid, utcDay(), limits)).used,
+            aiUsedToday: (await usage.get(user.uid, utcDay(), limitsFor(user.role))).used,
           })),
         ),
       });
