@@ -139,3 +139,29 @@ export const changeNetworkRestriction = (token: string, hash: string, action: Ne
     method: 'PUT',
     body: JSON.stringify(action),
   });
+
+export const searchMusic = (token: string, term: string) =>
+  request<{ tracks: import('@reelcraft/shared').MusicTrack[]; collectionFallback?: boolean }>(
+    `/music/search?${new URLSearchParams({ term })}`,
+    { token },
+  );
+export const musicLink = (token: string, id: string, action: 'preview' | 'download') =>
+  request<{ url: string; expires: string }>(`/music/${encodeURIComponent(id)}/${action}`, {
+    token,
+    method: 'POST',
+  });
+export const reportMusicExport = (token: string, id: string) =>
+  request(`/music/${encodeURIComponent(id)}/export`, { token, method: 'POST' });
+export async function saveMusicPreference(
+  token: string,
+  id: string,
+  music: import('@reelcraft/shared').MusicPreference,
+) {
+  const res = await fetch(`${API_URL}/api/v1/projects/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ music }),
+  });
+  if (!res.ok)
+    throw new Error('Music preference could not be saved. Your current edit is still available.');
+}

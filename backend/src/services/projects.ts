@@ -6,6 +6,7 @@ export interface ProjectRecord {
   uid: string;
   title?: string;
   style?: Style;
+  music?: import('@reelcraft/shared').MusicPreference;
   userPrompt: string;
   userMemos: string[];
   scenes: Scene[];

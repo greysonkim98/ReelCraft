@@ -88,7 +88,10 @@ export const scriptRequestSchema = z
   .object({
     scenes: z.array(sceneSchema).min(1).max(SCENES_MAX_COUNT),
     userPrompt: z.string().trim().min(1).max(USER_PROMPT_MAX_CHARS),
-    userMemos: z.array(z.string().trim().min(1).max(USER_MEMO_MAX_CHARS)).max(USER_MEMOS_MAX_COUNT).default([]),
+    userMemos: z
+      .array(z.string().trim().min(1).max(USER_MEMO_MAX_CHARS))
+      .max(USER_MEMOS_MAX_COUNT)
+      .default([]),
     /**
      * Grid pictures of the scenes (cells labeled with their scene_id), base64 JPEG without the data:
      * prefix. Optional: without them the script is written from tags and notes only.
@@ -110,7 +113,11 @@ export const scriptRequestSchema = z
     const ids = new Set<string>();
     req.scenes.forEach((s, i) => {
       if (ids.has(s.scene_id)) {
-        ctx.addIssue({ code: 'custom', message: 'duplicate scene_id', path: ['scenes', i, 'scene_id'] });
+        ctx.addIssue({
+          code: 'custom',
+          message: 'duplicate scene_id',
+          path: ['scenes', i, 'scene_id'],
+        });
       }
       ids.add(s.scene_id);
     });
@@ -171,10 +178,21 @@ export type ProgressEvent = z.infer<typeof progressEventSchema>;
 export const stylePreferenceSchema = z.object({ style: styleSchema });
 export type StylePreference = z.infer<typeof stylePreferenceSchema>;
 
+export const musicPreferenceSchema = z.object({
+  enabled: z.boolean(),
+  trackId: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{1,100}$/)
+    .nullable(),
+  volume: z.number().min(0).max(1),
+});
+export type MusicPreference = z.infer<typeof musicPreferenceSchema>;
+
 /** PATCH /projects/:id: only what a user edits. Everything else is written by the server. */
 export const projectPatchSchema = z
   .object({
     title: z.string().trim().min(1).max(SCRIPT_TITLE_MAX_CHARS).optional(),
+    music: musicPreferenceSchema.optional(),
     style: styleSchema.optional(),
     script: scriptSchema.optional(),
   })

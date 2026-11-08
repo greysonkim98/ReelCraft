@@ -22,6 +22,7 @@ const envSchema = z.object({
   TRUST_PROXY_HOPS: intWithDefault(0),
 
   // Groq (checked when a request needs it, with a message naming the variable).
+  EPIDEMIC_SOUND_API_KEY: optionalString,
   GROQ_API_KEY: optionalString,
   GROQ_MODEL: z.preprocess(emptyToUndefined, z.string().default(GROQ_MODELS.primary)),
   GROQ_VISION_MODEL: z.preprocess(emptyToUndefined, z.string().default(GROQ_VISION_MODEL)),

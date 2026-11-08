@@ -27,6 +27,7 @@ import type { AdminStore } from '../services/admin';
 import { createAdminRouter } from './admin';
 
 export interface RouterDeps extends NetworkDeps {
+  music?: import('../services/music').MusicService;
   script: ScriptService;
   verifier: TokenVerifier;
   usage: UsageStore;
@@ -73,6 +74,51 @@ export function createApiRouter(deps: RouterDeps): Router {
     const ip = normalizeIp(req.ip);
     return deps.ipHashSalt && ip ? hashIp(ip, deps.ipHashSalt) : undefined;
   };
+
+  const musicBurst = rateLimit({
+    windowMs: 60000,
+    limit: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  router.use('/music', auth, musicBurst, (_req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    next();
+  });
+  router.get('/music/search', async (req, res, next) => {
+    try {
+      const term = z.string().trim().min(1).max(1000).parse(req.query.term);
+      if (!deps.music) throw new AppError(503, 'MUSIC_UNAVAILABLE', 'Music is unavailable.');
+      res.json(await deps.music.search(currentUser(res).uid, term));
+    } catch (error) {
+      next(
+        error instanceof z.ZodError
+          ? new AppError(400, 'VALIDATION_ERROR', 'Invalid music request.')
+          : error,
+      );
+    }
+  });
+  router.post('/music/:id/:action', async (req, res, next) => {
+    try {
+      const id = z
+        .string()
+        .regex(/^[A-Za-z0-9_-]{1,100}$/)
+        .parse(req.params.id);
+      const action = z.enum(['preview', 'download', 'export']).parse(req.params.action);
+      if (!deps.music) throw new AppError(503, 'MUSIC_UNAVAILABLE', 'Music is unavailable.');
+      const uid = currentUser(res).uid;
+      if (action === 'export') {
+        await deps.music.exported(uid, id);
+        res.json({ ok: true });
+      } else res.json(await deps.music[action](uid, id));
+    } catch (error) {
+      next(
+        error instanceof z.ZodError
+          ? new AppError(400, 'VALIDATION_ERROR', 'Invalid music request.')
+          : error,
+      );
+    }
+  });
 
   router.get('/health', (_req, res) => {
     res.json({ ok: true, time: new Date().toISOString() });

@@ -16,6 +16,13 @@ export type Quality = (typeof QUALITIES)[number];
 export type SubtitleLanguage = (typeof SUBTITLE_LANGUAGES)[number];
 export type VoiceId = (typeof VOICES)[number]['id'];
 
+export interface MusicTrack {
+  id: string;
+  title: string;
+  mainArtists: string[];
+  isPreviewOnly: boolean;
+}
+
 export interface ClipMeta {
   name: string;
   size: number;

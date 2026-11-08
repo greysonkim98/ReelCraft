@@ -22,6 +22,9 @@ import {
 } from '@reelcraft/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
+import { MusicControls } from './MusicControls';
+import { musicLink, reportMusicExport, saveMusicPreference } from '@/lib/api';
+import type { MusicPreference } from '@reelcraft/shared';
 import { Icon } from './ui/Icon';
 import { ApiError, generateScript, getHealth, getUsage, getRuntimeSettings } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -43,7 +46,16 @@ interface ClipItem {
   note: string;
 }
 
-const STEPS = ['Clips', 'Style', 'Analyze', 'Captions', 'Voice', 'Review', 'Render', 'Share'] as const;
+const STEPS = [
+  'Clips',
+  'Style',
+  'Analyze',
+  'Captions',
+  'Voice',
+  'Review',
+  'Render',
+  'Share',
+] as const;
 const STAGE_DESCRIPTIONS = [
   'Start with the moments you want to keep.',
   'Set the mood. Make it feel like you.',
@@ -160,10 +172,15 @@ export function EditorWizard() {
     voiceId: DEFAULT_VOICE_ID,
     speed: VOICE_SPEED.default,
   });
-  const [voiceStatus, setVoiceStatus] = useState<{ busy: boolean; label?: string; fraction?: number; error?: string }>({
+  const [voiceStatus, setVoiceStatus] = useState<{
+    busy: boolean;
+    label?: string;
+    fraction?: number;
+    error?: string;
+  }>({
     busy: false,
   });
-  const [voiceSample, setVoiceSample] = useState<string | null>(null);
+  const [, setVoiceSample] = useState<string | null>(null);
 
   const [segments, setSegments] = useState<Segment[]>([]);
   const [unusedClips, setUnusedClips] = useState<number[]>([]);
@@ -202,6 +219,42 @@ export function EditorWizard() {
     running: false,
     fraction: 0,
   });
+  const [music, setMusic] = useState<MusicPreference>({
+    enabled: false,
+    trackId: null,
+    volume: 0.18,
+  });
+  const [musicProjectId, setMusicProjectId] = useState<string>();
+  const [musicSaveError, setMusicSaveError] = useState('');
+  const musicSaveQueue = useRef(Promise.resolve());
+  const outputMusic = useRef<string | null>(null);
+  const musicDescription =
+    `${style.tempo} ${style.color} instrumental background music for ${userPrompt}. ${clips.map((c) => c.note).join(' ')} ${segments.map((s) => s.subtitle).join(' ')}`.slice(
+      0,
+      1000,
+    );
+  function changeMusic(next: MusicPreference) {
+    setMusic(next);
+    setOutput(null);
+  }
+  useEffect(() => {
+    if (!musicProjectId) return;
+    let active = true;
+    const id = musicProjectId;
+    musicSaveQueue.current = musicSaveQueue.current
+      .catch(() => {})
+      .then(async () => {
+        try {
+          await saveMusicPreference(await getToken(), id, music);
+          if (active) setMusicSaveError('');
+        } catch (e) {
+          if (active) setMusicSaveError((e as Error).message);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [music, musicProjectId, getToken]);
   const [output, setOutput] = useState<{ url: string; blob: Blob } | null>(null);
 
   const [isolated, setIsolated] = useState<boolean | null>(null);
@@ -434,7 +487,12 @@ export function EditorWizard() {
         const picks = evenlySpaced(scenes.length, REEL_IMAGE_SCENES_MAX);
         grids = await buildSceneGrids(
           clips.map((c) => c.file),
-          picks.map((i) => ({ scene_id: scenes[i]!.scene_id, clipIndex: segments[i]!.clipIndex, start: scenes[i]!.start, end: scenes[i]!.end })),
+          picks.map((i) => ({
+            scene_id: scenes[i]!.scene_id,
+            clipIndex: segments[i]!.clipIndex,
+            start: scenes[i]!.start,
+            end: scenes[i]!.end,
+          })),
         );
       } catch {
         grids = [];
@@ -453,9 +511,16 @@ export function EditorWizard() {
         prev.map((s) => ({ ...s, subtitle: byId.get(s.id) ?? s.subtitle, editedByUser: false })),
       );
       setUsage(res.usage);
+      setMusicProjectId(res.projectId);
       reporterRef.current?.close();
       reporterRef.current = createProgressReporter({ projectId: res.projectId, getToken });
-      setAi({ running: false, done: true, fallback: res.source === 'fallback', model: res.model, described });
+      setAi({
+        running: false,
+        done: true,
+        fallback: res.source === 'fallback',
+        model: res.model,
+        described,
+      });
     } catch (err) {
       const e = err as ApiError;
       if (e.code === 'DAILY_LIMIT') {
@@ -523,7 +588,9 @@ export function EditorWizard() {
   const hasNarration = (text: string) => narrRef.current.has(narrKey(text));
   const spokenSegments = segments.filter((x) => x.subtitle.trim());
   const narrationReady =
-    narrVersion >= 0 && spokenSegments.length > 0 && spokenSegments.every((x) => hasNarration(x.subtitle));
+    narrVersion >= 0 &&
+    spokenSegments.length > 0 &&
+    spokenSegments.every((x) => hasNarration(x.subtitle));
 
   async function ensureNarration(
     signal?: AbortSignal,
@@ -534,12 +601,24 @@ export function EditorWizard() {
     if (!signal) abortRef.current = controller;
     const sig = signal ?? controller.signal;
     const targets = (only ?? segments).filter((x) => x.subtitle.trim());
-    const missing = [...new Set(targets.filter((x) => !hasNarration(x.subtitle)).map((x) => x.subtitle.trim()))];
+    const missing = [
+      ...new Set(targets.filter((x) => !hasNarration(x.subtitle)).map((x) => x.subtitle.trim())),
+    ];
     const status = (fraction: number, label: string) => {
       setVoiceStatus({ busy: true, label, fraction });
       notify?.(label);
     };
     try {
+      // Recover narration already detached by a render made before the buffer-copy fix.
+      // The preview Blob owns a separate copy, so recovery needs no new synthesis.
+      for (const text of new Set(targets.map((target) => target.subtitle.trim()))) {
+        const cached = narrRef.current.get(narrKey(text));
+        if (cached && cached.wav.byteLength === 0) {
+          const audio = await fetch(cached.url, { signal: sig });
+          if (!audio.ok) throw new Error('Could not restore cached narration.');
+          cached.wav = new Uint8Array(await audio.arrayBuffer());
+        }
+      }
       for (const [i, text] of missing.entries()) {
         if (sig.aborted) throw new CancelledError();
         status(i / missing.length, `Generating narration ${i + 1}/${missing.length}…`);
@@ -547,11 +626,13 @@ export function EditorWizard() {
         const line = await synthesizeLine(text, {
           voiceId: voice.voiceId,
           speed: voice.speed,
-          onModelProgress: (f) => status(f, `Downloading voice model… ${Math.round(f * 100)}%`),
+          onModelProgress: (f) => status(f, `Preparing voice model… ${Math.round(f * 100)}%`),
         });
         narrRef.current.set(narrKey(text), {
           ...line,
-          url: URL.createObjectURL(new Blob([line.wav as Uint8Array<ArrayBuffer>], { type: 'audio/wav' })),
+          url: URL.createObjectURL(
+            new Blob([line.wav as Uint8Array<ArrayBuffer>], { type: 'audio/wav' }),
+          ),
         });
         setNarrVersion((v) => v + 1);
       }
@@ -561,7 +642,8 @@ export function EditorWizard() {
     } catch (err) {
       setVoiceStatus({
         busy: false,
-        error: err instanceof CancelledError ? undefined : `Narration failed: ${(err as Error).message}`,
+        error:
+          err instanceof CancelledError ? undefined : `Narration failed: ${(err as Error).message}`,
       });
       report('failed', 0);
       throw err;
@@ -583,10 +665,10 @@ export function EditorWizard() {
   }
 
   async function playSample() {
-    setVoiceStatus({ busy: true, label: 'Loading voice model…' });
+    setVoiceStatus({ busy: true, label: 'Preparing voice…' });
     try {
       const url = await previewVoice(voice.voiceId, voice.speed, (f) =>
-        setVoiceStatus({ busy: true, label: `Downloading voice model… ${Math.round(f * 100)}%` }),
+        setVoiceStatus({ busy: true, label: `Preparing voice model… ${Math.round(f * 100)}%` }),
       );
       setVoiceSample((old) => {
         if (old) URL.revokeObjectURL(old);
@@ -595,7 +677,10 @@ export function EditorWizard() {
       setVoiceStatus({ busy: false });
       void new Audio(url).play().catch(() => undefined);
     } catch (err) {
-      setVoiceStatus({ busy: false, error: `Could not load the voice model: ${(err as Error).message}` });
+      setVoiceStatus({
+        busy: false,
+        error: `Could not load the voice model: ${(err as Error).message}`,
+      });
     }
   }
 
@@ -616,10 +701,21 @@ export function EditorWizard() {
           `This project exceeds the current limits: ${currentLimits.maxClips} clips and ${currentLimits.maxOutputSeconds} seconds.`,
         );
       const narration = voice.enabled
-        ? await ensureNarration(controller.signal, (notice) => setRender((r) => ({ ...r, notice: notice || undefined })))
+        ? await ensureNarration(controller.signal, (notice) =>
+            setRender((r) => ({ ...r, notice: notice || undefined })),
+          )
         : [];
       setRender((r) => ({ ...r, notice: undefined }));
+      let soundtrack: { bytes: Uint8Array; volume: number } | undefined;
+      if (music.enabled && music.trackId) {
+        const link = await musicLink(await getToken(), music.trackId, 'download');
+        const audio = await fetch(link.url, { signal: controller.signal, credentials: 'omit' });
+        if (!audio.ok)
+          throw new Error('Music could not be downloaded. Retry or turn music off to continue.');
+        soundtrack = { bytes: new Uint8Array(await audio.arrayBuffer()), volume: music.volume };
+      }
       const blob = await encodeVideo({
+        music: soundtrack,
         files: clips.map((c) => c.file),
         hasAudio,
         segments,
@@ -632,6 +728,7 @@ export function EditorWizard() {
           report('rendering', fraction * 100);
         },
       });
+      outputMusic.current = soundtrack ? music.trackId : null;
       setOutput({ url: URL.createObjectURL(blob), blob });
       setRender({ running: false, fraction: 1 });
       report('done', 100);
@@ -661,12 +758,33 @@ export function EditorWizard() {
     );
   }, [output, fileName]);
 
+  async function recordExport() {
+    if (outputMusic.current) await reportMusicExport(await getToken(), outputMusic.current);
+  }
+  async function download(event: React.MouseEvent<HTMLAnchorElement>) {
+    if (!outputMusic.current) return;
+    event.preventDefault();
+    if (!output) return;
+    try {
+      await recordExport();
+      const anchor = document.createElement('a');
+      anchor.href = output.url;
+      anchor.download = fileName;
+      anchor.click();
+    } catch {
+      setMusicSaveError(
+        'Could not report music export. Please retry, or remove music and render again.',
+      );
+    }
+  }
   async function share() {
     if (!output) return;
     try {
       await navigator.share({ files: [new File([output.blob], fileName, { type: 'video/mp4' })] });
-    } catch {
-      // user dismissed the share sheet
+      if (outputMusic.current) await recordExport();
+    } catch (error) {
+      if ((error as Error).name !== 'AbortError')
+        setMusicSaveError('Sharing or music usage reporting failed. Please retry.');
     }
   }
 
@@ -1084,9 +1202,9 @@ export function EditorWizard() {
                 AI captions
               </h2>
               <p className="text-sm text-slate-600">
-                Describe the reel you want. This sentence, your clip notes, each scene&apos;s
-                length and one small still picture per scene are sent to the AI. Your video
-                itself is not, and the pictures are not stored.
+                Describe the reel you want. This sentence, your clip notes, each scene&apos;s length
+                and one small still picture per scene are sent to the AI. Your video itself is not,
+                and the pictures are not stored.
               </p>
               <label className="block space-y-1 text-sm">
                 <span className="font-medium">What kind of reel is this?</span>
@@ -1265,8 +1383,10 @@ export function EditorWizard() {
                       </p>
                     )}
                     <p className="text-xs text-slate-500">
-                      The voice runs in your browser. The first use downloads a ~90 MB model; narration is
-                      generated when you render.
+                      Voice is generated on your device. First use downloads a ~90 MB model; the
+                      browser caches it for reuse. Generated narration and voice samples are also
+                      saved locally, so matching text and voice settings can play without loading
+                      the model again. Clearing browser storage may require another download.
                     </p>
                   </div>
                 )}
@@ -1282,11 +1402,16 @@ export function EditorWizard() {
                     {narrationReady ? 'Narration ready' : 'Generate narration'}
                   </button>
                   {spokenSegments.length === 0 && (
-                    <p className="text-xs text-slate-500">Write captions first, then narration can be generated.</p>
+                    <p className="text-xs text-slate-500">
+                      Write captions first, then narration can be generated.
+                    </p>
                   )}
                   {voiceStatus.busy && (
                     <>
-                      <ProgressBar value={voiceStatus.fraction ?? 0} label={voiceStatus.label ?? ''} />
+                      <ProgressBar
+                        value={voiceStatus.fraction ?? 0}
+                        label={voiceStatus.label ?? ''}
+                      />
                       <button
                         type="button"
                         onClick={cancelJob}
@@ -1442,6 +1567,33 @@ export function EditorWizard() {
             </section>
           )}
 
+          {step >= 5 && (
+            <>
+              <MusicControls
+                value={music}
+                onChange={changeMusic}
+                description={musicDescription}
+                getToken={getToken}
+                disabled={render.running}
+              />
+              {musicSaveError && (
+                <p role="status" className="text-sm text-amber-800">
+                  {musicSaveError}
+                </p>
+              )}
+              {step === 8 && !output && (
+                <button
+                  type="button"
+                  disabled={render.running || overLimit}
+                  className="rounded-lg bg-slate-900 px-4 py-2 text-white"
+                  onClick={() => void runRender()}
+                >
+                  {render.running ? 'Rendering preview?' : 'Render updated preview'}
+                </button>
+              )}
+              {step === 8 && render.error && <p role="alert">{render.error}</p>}
+            </>
+          )}
           {step === 7 && (
             <section aria-labelledby="s7" className="space-y-4">
               <h2 id="s7" className="text-lg font-semibold">
@@ -1512,6 +1664,7 @@ export function EditorWizard() {
                   <a
                     href={output.url}
                     download={fileName}
+                    onClick={download}
                     className="block w-full rounded-xl bg-slate-900 px-4 py-3 text-center font-semibold text-white"
                   >
                     Download ({fileName})

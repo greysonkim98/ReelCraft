@@ -29,6 +29,7 @@ export interface RenderPlan {
   color: ColorLook;
   quality: Quality;
   narration?: NarrationLine[];
+  music?: { path: string; volume: number };
   assPath: string;
   fontsDir: string;
   outputPath: string;
@@ -131,7 +132,8 @@ export function buildRenderCommand(plan: RenderPlan): RenderCommand {
       const inputIdx = inputClips.length + k;
       inputs.push(...inputThreadArgs, '-i', line.path);
       const segDur = durations[line.segmentIndex];
-      if (segDur === undefined) throw new Error(`Narration refers to missing segment ${line.segmentIndex}.`);
+      if (segDur === undefined)
+        throw new Error(`Narration refers to missing segment ${line.segmentIndex}.`);
       const tempo = Math.min(RENDER.maxAtempo, Math.max(1, line.durationSec / segDur));
       const effective = line.durationSec / tempo;
       let chain = `[${inputIdx}:a]${AUDIO_NORMALISE}`;
@@ -148,13 +150,30 @@ export function buildRenderCommand(plan: RenderPlan): RenderCommand {
       parts.push('[n0]anull[nar]');
     } else {
       // amix divides by the input count; the huge dropout transition keeps that constant, volume=n undoes it.
-      parts.push(`${lines.map((_, k) => `[n${k}]`).join('')}amix=inputs=${n}:dropout_transition=1000,volume=${n}[nar]`);
+      parts.push(
+        `${lines.map((_, k) => `[n${k}]`).join('')}amix=inputs=${n}:dropout_transition=1000,volume=${n}[nar]`,
+      );
     }
     parts.push(`[ac]volume=${RENDER.narrationOriginalVolume}[bg]`);
     parts.push('[bg][nar]amix=inputs=2:duration=first:dropout_transition=1000,volume=2[aout]');
     audioLabel = 'aout';
   }
 
+  if (plan.music) {
+    if (!Number.isFinite(plan.music.volume) || plan.music.volume < 0 || plan.music.volume > 1)
+      throw new Error('Invalid music volume.');
+    const duration = durations.reduce((a, b) => a + b, 0);
+    const index = inputClips.length + lines.length;
+    inputs.push(...inputThreadArgs, '-stream_loop', '-1', '-i', plan.music.path);
+    // Keep the existing audio mix intact; lower music under narration and limit peaks.
+    parts.push(
+      `[${index}:a]${AUDIO_NORMALISE},atrim=duration=${f3(duration)},asetpts=PTS-STARTPTS,volume=${f3(plan.music.volume * (lines.length ? 0.35 : 1))},afade=t=out:st=${f3(Math.max(0, duration - 0.5))}:d=0.5[music]`,
+    );
+    parts.push(
+      `[${audioLabel}][music]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95:latency=1[musicout]`,
+    );
+    audioLabel = 'musicout';
+  }
   const filterComplex = parts.join(';');
   const args = [
     '-y',
