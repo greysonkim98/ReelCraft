@@ -43,7 +43,9 @@ describe('users', () => {
     const { app } = setup();
     const first = await request(app).post('/api/v1/me/session').set(auth('alice'));
     expect(first.body).toEqual({ email: 'alice@example.com', role: 'user' });
-    expect((await request(app).put('/api/v1/me/style').set(auth('alice')).send({ style })).status).toBe(204);
+    expect(
+      (await request(app).put('/api/v1/me/style').set(auth('alice')).send({ style })).status,
+    ).toBe(204);
     const again = await request(app).post('/api/v1/me/session').set(auth('alice'));
     expect(again.body.style).toEqual(style);
   });
@@ -52,8 +54,12 @@ describe('users', () => {
     const { app } = setup({ boss: { role: 'admin' } });
     const first = await request(app).post('/api/v1/me/session').set(auth('boss'));
     expect(first.body.role).toBe('admin');
-    expect((await request(app).post('/api/v1/me/session').set(auth('boss'))).body.role).toBe('admin');
-    expect((await request(app).post('/api/v1/me/session').set(auth('someone'))).body.role).toBe('user');
+    expect((await request(app).post('/api/v1/me/session').set(auth('boss'))).body.role).toBe(
+      'admin',
+    );
+    expect((await request(app).post('/api/v1/me/session').set(auth('someone'))).body.role).toBe(
+      'user',
+    );
   });
 
   it('treats an unknown role value as a plain user', async () => {
@@ -86,9 +92,14 @@ describe('projects', () => {
   it('reads, updates and deletes my project', async () => {
     const { app, projects } = setup();
     await seed(projects, 'p1', 'alice');
-    expect((await request(app).get('/api/v1/projects/p1').set(auth('alice'))).body.title).toBe('Busan');
+    expect((await request(app).get('/api/v1/projects/p1').set(auth('alice'))).body.title).toBe(
+      'Busan',
+    );
 
-    const patch = await request(app).patch('/api/v1/projects/p1').set(auth('alice')).send({ title: 'Seoul', style });
+    const patch = await request(app)
+      .patch('/api/v1/projects/p1')
+      .set(auth('alice'))
+      .send({ title: 'Seoul', style });
     expect(patch.status).toBe(204);
     const after = await request(app).get('/api/v1/projects/p1').set(auth('alice'));
     expect(after.body.title).toBe('Seoul');
@@ -102,7 +113,10 @@ describe('projects', () => {
     const { app, projects } = setup();
     await seed(projects, 'p1', 'alice');
     expect((await request(app).get('/api/v1/projects/p1').set(auth('bob'))).status).toBe(404);
-    expect((await request(app).patch('/api/v1/projects/p1').set(auth('bob')).send({ title: 'x' })).status).toBe(404);
+    expect(
+      (await request(app).patch('/api/v1/projects/p1').set(auth('bob')).send({ title: 'x' }))
+        .status,
+    ).toBe(404);
     expect((await request(app).delete('/api/v1/projects/p1').set(auth('bob'))).status).toBe(404);
     expect(await projects.get('p1')).not.toBeNull();
   });
@@ -110,8 +124,54 @@ describe('projects', () => {
   it('rejects an empty patch and fields the user may not edit', async () => {
     const { app, projects } = setup();
     await seed(projects, 'p1', 'alice');
-    expect((await request(app).patch('/api/v1/projects/p1').set(auth('alice')).send({})).status).toBe(400);
-    await request(app).patch('/api/v1/projects/p1').set(auth('alice')).send({ title: 'ok', uid: 'bob' });
+    expect(
+      (await request(app).patch('/api/v1/projects/p1').set(auth('alice')).send({})).status,
+    ).toBe(400);
+    await request(app)
+      .patch('/api/v1/projects/p1')
+      .set(auth('alice'))
+      .send({ title: 'ok', uid: 'bob' });
     expect((await projects.get('p1'))?.uid).toBe('alice');
+  });
+});
+
+describe('music preferences', () => {
+  it('persists selection, change, volume, and complete removal on the owned project', async () => {
+    const { app, projects } = setup();
+    await seed(projects, 'music-project', 'alice');
+    for (const music of [
+      { enabled: true, trackId: 'track-one', volume: 0.18 },
+      { enabled: true, trackId: 'track-two', volume: 0.3 },
+      { enabled: false, trackId: null, volume: 0.3 },
+    ]) {
+      expect(
+        (
+          await request(app)
+            .patch('/api/v1/projects/music-project')
+            .set(auth('alice'))
+            .send({ music })
+        ).status,
+      ).toBe(204);
+      expect(
+        (await request(app).get('/api/v1/projects/music-project').set(auth('alice'))).body.music,
+      ).toEqual(music);
+    }
+    expect(
+      (
+        await request(app)
+          .patch('/api/v1/projects/music-project')
+          .set(auth('bob'))
+          .send({ music: { enabled: true, trackId: 'x', volume: 0.2 } })
+      ).status,
+    ).toBe(404);
+  });
+  it('requires authentication and rejects malformed music requests', async () => {
+    const { app } = setup();
+    expect((await request(app).get('/api/v1/music/search?term=calm')).status).toBe(401);
+    expect((await request(app).post('/api/v1/music/track/download')).status).toBe(401);
+    expect((await request(app).get('/api/v1/music/search').set(auth('alice'))).status).toBe(400);
+    expect((await request(app).post('/api/v1/music/track/unknown').set(auth('alice'))).status).toBe(
+      400,
+    );
   });
 });

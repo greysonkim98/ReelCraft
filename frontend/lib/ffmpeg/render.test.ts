@@ -44,13 +44,17 @@ describe('buildRenderCommand', () => {
   it('scales to fill 720x1280, crops, fixes SAR and fps for every segment', () => {
     for (const i of [0, 1, 2]) {
       expect(fg).toMatch(
-        new RegExp(`trim=start=[\\d.]+:end=[\\d.]+,setpts=PTS-STARTPTS,scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1,fps=30\\[v${i}\\]`),
+        new RegExp(
+          `trim=start=[\\d.]+:end=[\\d.]+,setpts=PTS-STARTPTS,scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1,fps=30\\[v${i}\\]`,
+        ),
       );
     }
   });
 
   it('substitutes silence for a clip without audio', () => {
-    expect(fg).toContain('anullsrc=r=48000:cl=stereo,atrim=duration=1.500,asetpts=PTS-STARTPTS[a1]');
+    expect(fg).toContain(
+      'anullsrc=r=48000:cl=stereo,atrim=duration=1.500,asetpts=PTS-STARTPTS[a1]',
+    );
   });
 
   it('concatenates all segments, then colour grade and subtitles', () => {
@@ -61,7 +65,9 @@ describe('buildRenderCommand', () => {
   it('maps video and original audio and uses the specified encoder settings', () => {
     expect(cmd.args).toEqual(expect.arrayContaining(['-map', '[vout]', '[ac]']));
     const tail = cmd.args.slice(cmd.args.indexOf('-c:v')).join(' ');
-    expect(tail).toBe('-c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -r 30 -c:a aac -b:a 128k -movflags +faststart -threads 2 /out.mp4');
+    expect(tail).toBe(
+      '-c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -r 30 -c:a aac -b:a 128k -movflags +faststart -threads 2 /out.mp4',
+    );
   });
 
   it('renders 720p at 720x1280', () => {
@@ -70,7 +76,9 @@ describe('buildRenderCommand', () => {
 
   it('rejects empty plans and dangling clip references', () => {
     expect(() => buildRenderCommand({ ...plan, segments: [] })).toThrow();
-    expect(() => buildRenderCommand({ ...plan, segments: [{ clipIndex: 9, start: 0, end: 1 }] })).toThrow();
+    expect(() =>
+      buildRenderCommand({ ...plan, segments: [{ clipIndex: 9, start: 0, end: 1 }] }),
+    ).toThrow();
   });
 });
 
@@ -85,7 +93,9 @@ describe('narration mixing', () => {
   const fg = withNarration.filterComplex;
 
   it('adds narration inputs after the clip inputs', () => {
-    const inputs = withNarration.args.flatMap((a, i) => (a === '-i' ? [withNarration.args[i + 1]] : []));
+    const inputs = withNarration.args.flatMap((a, i) =>
+      a === '-i' ? [withNarration.args[i + 1]] : [],
+    );
     expect(inputs.slice(-2)).toEqual(['/tmp/tts_0.wav', '/tmp/tts_1.wav']);
   });
 
@@ -110,7 +120,10 @@ describe('narration mixing', () => {
 
   it('rejects narration for a missing segment', () => {
     expect(() =>
-      buildRenderCommand({ ...plan, narration: [{ path: 'x.wav', segmentIndex: 7, durationSec: 1 }] }),
+      buildRenderCommand({
+        ...plan,
+        narration: [{ path: 'x.wav', segmentIndex: 7, durationSec: 1 }],
+      }),
     ).toThrow(/missing segment/);
   });
 });
@@ -120,5 +133,33 @@ describe('parseProgressTime', () => {
     expect(parseProgressTime('frame= 150 fps= 30 time=00:00:05.12 bitrate=')).toBeCloseTo(5.12);
     expect(parseProgressTime('time=01:02:03.50')).toBeCloseTo(3723.5);
     expect(parseProgressTime('no progress here')).toBeUndefined();
+  });
+});
+
+describe('optional music rendering', () => {
+  it('loops and trims music without changing original or narration inputs', () => {
+    const result = buildRenderCommand({
+      ...plan,
+      narration: [{ path: '/voice.wav', segmentIndex: 0, durationSec: 1 }],
+      music: { path: '/music.mp3', volume: 0.2 },
+    });
+    expect(result.args.join(' ')).toContain('-stream_loop -1 -i /music.mp3');
+    expect(result.filterComplex).toContain('[3:a]');
+    expect(result.filterComplex).toContain('atrim=duration=5.000');
+    expect(result.filterComplex).toContain('volume=0.070');
+    expect(result.filterComplex).toContain('[aout][music]amix=inputs=2:duration=first:normalize=0');
+  });
+  it('changes volume and removes the soundtrack completely', () => {
+    const music = buildRenderCommand({ ...plan, music: { path: '/music.mp3', volume: 0.4 } });
+    expect(music.filterComplex).toContain('volume=0.400');
+    const removed = buildRenderCommand(plan);
+    expect(removed.args).not.toContain('/music.mp3');
+    expect(removed.filterComplex).not.toContain('[music]');
+    expect(removed.args).toContain('[ac]');
+  });
+  it('rejects invalid volume', () => {
+    expect(() => buildRenderCommand({ ...plan, music: { path: '/m', volume: NaN } })).toThrow(
+      'Invalid music volume',
+    );
   });
 });

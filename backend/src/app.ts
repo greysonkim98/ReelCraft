@@ -1,4 +1,5 @@
 import cors from 'cors';
+import { createMusicService, type MusicService } from './services/music';
 import express, { type Express } from 'express';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
@@ -22,6 +23,7 @@ import { createAdminStore, createMemoryAdminStorage, type AdminStore } from './s
 const SCRIPT_BODY_LIMIT = '1mb';
 
 export interface AppDeps {
+  music?: MusicService;
   env: Env;
   script: ScriptService;
   verifier: TokenVerifier;
@@ -38,6 +40,7 @@ export interface AppDeps {
 
 export function createApp({
   env,
+  music,
   script,
   verifier,
   usage,
@@ -112,6 +115,7 @@ export function createApp({
   app.use(
     '/api/v1',
     createApiRouter({
+      music: music ?? createMusicService(env.EPIDEMIC_SOUND_API_KEY),
       script,
       verifier,
       usage,
