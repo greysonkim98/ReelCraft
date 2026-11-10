@@ -1,5 +1,10 @@
 rules_version = '2';
 
+// Assumed read models: users/{uid} has optional deletedAt (null/epoch milliseconds/Timestamp)
+// and suspendedUntil (null/epoch milliseconds/Timestamp). Other profile fields are server-managed.
+// projects/{id} and aiUsage/{id} contain an immutable uid string. Counters, runtime settings,
+// restrictions, network activity and audit records are server-only, including subcollections.
+// All client creates, updates and deletes are denied; schema validation lives in the API.
 // Every write goes through the backend (Admin SDK bypasses these rules). Clients may only read
 // their own documents, so a user cannot touch their own daily usage counter.
 service cloud.firestore {
@@ -8,21 +13,33 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function activeAccount() {
+      let profilePath = /databases/$(database)/documents/users/$(request.auth.uid);
+      let profile = get(profilePath).data;
+      let deleted = profile.get('deletedAt', null);
+      let suspended = profile.get('suspendedUntil', null);
+      return exists(profilePath)
+        && (deleted == null || deleted == 0)
+        && (suspended == null
+          || (suspended is number && suspended <= request.time.toMillis())
+          || (suspended is timestamp && suspended <= request.time));
+    }
+
     // Profile
     match /users/{uid} {
-      allow read: if signedIn() && request.auth.uid == uid;
+      allow read: if signedIn() && request.auth.uid == uid && activeAccount();
       allow write: if false;
     }
 
     // Render jobs: scenes.json, script JSON and progress
     match /projects/{projectId} {
-      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow read: if signedIn() && resource.data.uid == request.auth.uid && activeAccount();
       allow write: if false;
     }
 
     // Log of Groq calls
     match /aiUsage/{entryId} {
-      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow read: if signedIn() && resource.data.uid == request.auth.uid && activeAccount();
       allow write: if false;
     }
 

@@ -194,7 +194,15 @@ export const projectPatchSchema = z
     title: z.string().trim().min(1).max(SCRIPT_TITLE_MAX_CHARS).optional(),
     music: musicPreferenceSchema.optional(),
     style: styleSchema.optional(),
-    script: scriptSchema.optional(),
+    // Bound persisted edits separately from provider output, which is repaired after parsing.
+    script: scriptSchema.extend({
+      scenes: z.array(scriptSceneSchema.extend({
+        scene_id: z.string().min(1).max(40),
+        caption: z.string().max(SUBTITLE_ABS_MAX_CHARS),
+        voiceover: z.string().max(SUBTITLE_ABS_MAX_CHARS).nullable(),
+        location_text: z.string().max(200).nullable(),
+      })).max(SCENES_MAX_COUNT),
+    }).optional(),
   })
   .refine((p) => Object.keys(p).length > 0, { message: 'nothing to update' });
 export type ProjectPatch = z.infer<typeof projectPatchSchema>;

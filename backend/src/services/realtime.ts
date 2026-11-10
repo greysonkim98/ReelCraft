@@ -53,19 +53,24 @@ export function attachRealtime(
   httpServer: HttpServer,
   deps: RealtimeDeps,
 ): Notifier & { io: Server } {
+  const maxConnections = deps.maxConnections ?? SOCKET_MAX_CONNECTIONS;
   const io = new Server(httpServer, {
     cors: { origin: deps.origins, credentials: true },
     maxHttpBufferSize: 10_000,
+    allowRequest: (req, callback) => {
+      const origin = req.headers.origin;
+      // Native clients do not send Origin; every client must still authenticate.
+      callback(null, (!origin || deps.origins.includes(origin)) && io.engine.clientsCount < maxConnections);
+    },
   });
 
   const idleMs = deps.idleMs ?? SOCKET_IDLE_MS;
   const maxMs = deps.maxMs ?? SOCKET_MAX_MS;
-  const maxConnections = deps.maxConnections ?? SOCKET_MAX_CONNECTIONS;
 
   io.use(async (socket, next) => {
     if (io.engine.clientsCount > maxConnections) return next(new Error('SERVER_BUSY'));
     const token = (socket.handshake.auth as { token?: unknown } | undefined)?.token;
-    if (typeof token !== 'string' || token === '') return next(new Error('UNAUTHENTICATED'));
+    if (typeof token !== 'string' || token === '' || token.length > 8192) return next(new Error('UNAUTHENTICATED'));
     try {
       socket.data.user = await deps.verifier.verify(token);
       if (deps.users) assertActiveUser(await deps.users.get((socket.data.user as AuthUser).uid));
@@ -81,6 +86,7 @@ export function attachRealtime(
     const lastStage = new Map<string, string>();
     let windowStart = Date.now();
     let eventsInWindow = 0;
+    let inFlight = false;
 
     const close = (reason: 'idle' | 'max') => {
       socket.emit('session:expired', { reason });
@@ -100,7 +106,7 @@ export function attachRealtime(
     socket.on(
       'project:progress',
       async (payload: unknown, ack?: (res: { ok: boolean; code?: string }) => void) => {
-        touch();
+        ack = typeof ack === 'function' ? ack : undefined;
         const now = Date.now();
         if (now - windowStart >= 1000) {
           windowStart = now;
@@ -112,13 +118,24 @@ export function attachRealtime(
         const parsed = progressEventSchema.safeParse(payload);
         if (!parsed.success) return ack?.({ ok: false, code: 'VALIDATION_ERROR' });
         const ev = parsed.data;
+        if (inFlight) return ack?.({ ok: false, code: 'RATE_LIMITED' });
+        inFlight = true;
         try {
+          try {
+            await deps.verifier.verify(socket.handshake.auth.token as string);
+          } catch {
+            ack?.({ ok: false, code: 'UNAUTHENTICATED' });
+            socket.disconnect(true);
+            return;
+          }
           if (deps.users) assertActiveUser(await deps.users.get(user.uid));
           const project = await deps.projects.get(ev.projectId);
           if (!project || project.uid !== user.uid) return ack?.({ ok: false, code: 'NOT_FOUND' });
+          if (!socket.connected) return;
+          touch();
           if (lastStage.get(ev.projectId) !== ev.stage) {
-            lastStage.set(ev.projectId, ev.stage);
             await deps.projects.setStage(ev.projectId, ev.stage, ev.percent, ev.message);
+            lastStage.set(ev.projectId, ev.stage);
           }
           socket.to(room(user.uid)).emit('project:progress', ev);
           ack?.({ ok: true });
@@ -133,6 +150,8 @@ export function attachRealtime(
           }
           deps.logger.error({ err }, 'progress event failed');
           ack?.({ ok: false, code: 'INTERNAL' });
+        } finally {
+          inFlight = false;
         }
       },
     );

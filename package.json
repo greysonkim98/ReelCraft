@@ -7,7 +7,7 @@
     "frontend"
   ],
   "engines": {
-    "node": ">=20"
+    "node": "^20.19.0 || >=22.12.0"
   },
   "scripts": {
     "build": "npm run build -w shared && npm run build -w backend && npm run build -w frontend",
@@ -17,10 +17,12 @@
     "format": "prettier --write .",
     "typecheck": "npm run build -w shared && npm run typecheck -w backend && npm run typecheck -w frontend",
     "test": "npm run build -w shared && npm test -w backend && npm test -w frontend",
-    "verify:render": "tsx scripts/verify-render.ts"
+    "verify:render": "tsx scripts/verify-render.ts",
+    "test:rules": "npm run build -w shared && npm run build -w backend && npx --yes firebase-tools@15.35.0 emulators:exec --only firestore --project demo-reelcraft-security --config firebase.security-test.json \"node --test scripts/test-firestore-rules.mjs\""
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
+    "@firebase/rules-unit-testing": "^5.0.2",
     "eslint": "^9.0.0",
     "prettier": "^3.3.0",
     "tsx": "^4.19.0",
@@ -29,5 +31,13 @@
   },
   "dependencies": {
     "firebase": "^12.19.0"
+  },
+  "overrides": {
+    "@grpc/grpc-js": "^1.14.5",
+    "postcss": "^8.5.28",
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.6"
+    },
+    "sharp": "^0.35.5"
   }
 }

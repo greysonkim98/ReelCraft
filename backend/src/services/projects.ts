@@ -75,14 +75,14 @@ export function createFirestoreProjectStore(projectId: string): ProjectStore {
     async setStage(id, stage, percent, message) {
       await col()
         .doc(id)
-        .set({ stage, percent, ...(message ? { message } : {}), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+        .update({ stage, percent, ...(message ? { message } : {}), updatedAt: FieldValue.serverTimestamp() });
     },
     async listByUser(uid, limit = 50) {
       const snap = await col().where('uid', '==', uid).orderBy('updatedAt', 'desc').limit(limit).get();
       return snap.docs.map((d) => ({ id: d.id, ...(d.data() as ProjectRecord) }));
     },
     async update(id, patch) {
-      await col().doc(id).set({ ...patch, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+      await col().doc(id).update({ ...patch, updatedAt: FieldValue.serverTimestamp() });
     },
     async remove(id) {
       await col().doc(id).delete();
