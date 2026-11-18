@@ -71,6 +71,9 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     throw new Error('IPINFO_TOKEN and FIREBASE_WEB_APP_ID are required for IPINFO_FLAGGED_ASNS.');
   }
   if (env.NODE_ENV === 'production') {
+    if (source.FIREBASE_AUTH_EMULATOR_HOST || source.FIRESTORE_EMULATOR_HOST) {
+      throw new Error('Firebase emulators are not allowed in production.');
+    }
     if (env.STORE === 'memory') {
       throw new Error(
         'STORE=memory is not allowed in production (counters would reset on every cold start).',

@@ -16,7 +16,7 @@ export interface TokenVerifier {
 export function createFirebaseVerifier(projectId: string): TokenVerifier {
   return {
     async verify(idToken) {
-      const decoded = await getAuth(getFirebaseApp(projectId)).verifyIdToken(idToken);
+      const decoded = await getAuth(getFirebaseApp(projectId)).verifyIdToken(idToken, true);
       return { uid: decoded.uid, email: decoded.email };
     },
   };
@@ -30,7 +30,7 @@ export const bearerToken = (header: string | undefined): string | null => {
 export function requireAuth(verifier: TokenVerifier, users?: UserStore): RequestHandler {
   return async (req, res, next) => {
     const token = bearerToken(req.header('authorization'));
-    if (!token) return next(new AppError(401, 'UNAUTHENTICATED', 'Sign in to use this feature.'));
+    if (!token || token.length > 8192) return next(new AppError(401, 'UNAUTHENTICATED', 'Sign in to use this feature.'));
     try {
       res.locals.user = await verifier.verify(token);
     } catch {

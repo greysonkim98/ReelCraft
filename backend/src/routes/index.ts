@@ -295,6 +295,7 @@ export function createApiRouter(deps: RouterDeps): Router {
       const day = utcDay();
       let hash: string | undefined;
       let consumed = false;
+      let upstreamAnswered = false;
       try {
         const { limits: runtime } = await deps.admin.getSettings();
         if (
@@ -318,10 +319,12 @@ export function createApiRouter(deps: RouterDeps): Router {
         consumed = true;
 
         const result = await deps.script.generateScript(input);
+        upstreamAnswered = result.calls > 0;
         // No Groq answer at all means nothing was spent upstream: give the use back.
         if (result.calls === 0) {
-          await deps.usage.refund(uid, day, hash);
+          // A refund can commit before its network acknowledgement is lost. Never retry it here.
           consumed = false;
+          await deps.usage.refund(uid, day, hash);
         }
 
         const projectId = randomUUID();
@@ -360,7 +363,7 @@ export function createApiRouter(deps: RouterDeps): Router {
         deps.notifier.notify(uid, 'script:ready', { projectId });
         res.json(body);
       } catch (err) {
-        if (consumed && !(err instanceof AppError && err.code === 'DAILY_LIMIT')) {
+        if (consumed && !upstreamAnswered && !(err instanceof AppError && err.code === 'DAILY_LIMIT')) {
           await deps.usage.refund(uid, day, hash).catch(() => undefined);
         }
         next(err);

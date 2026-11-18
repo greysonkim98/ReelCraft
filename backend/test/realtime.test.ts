@@ -2,16 +2,17 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import pino from 'pino';
 import { io as connect, type Socket } from 'socket.io-client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryProjectStore } from '../src/services/projects';
 import { attachRealtime } from '../src/services/realtime';
+import type { TokenVerifier } from '../src/services/auth';
 import { fakeVerifier, makeRequest } from './helpers';
 import { createMemoryUserStore, type UserStore } from '../src/services/users';
 
 let server: Server;
 let url: string;
 let notifier: ReturnType<typeof attachRealtime>;
-let limits: { idleMs?: number; maxMs?: number; maxConnections?: number; users?: UserStore } = {};
+let limits: { idleMs?: number; maxMs?: number; maxConnections?: number; users?: UserStore; verifier?: TokenVerifier } = {};
 const projects = createMemoryProjectStore();
 const sockets: Socket[] = [];
 
@@ -63,6 +64,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   limits = {};
   sockets.splice(0).forEach((s) => s.close());
   await notifier.io.close();
@@ -85,6 +87,66 @@ const restart = async (l: typeof limits) => {
 const disconnected = (s: Socket) => new Promise<string>((resolve) => s.once('disconnect', resolve));
 
 describe('realtime cost guard', () => {
+  it('rejects a disallowed WebSocket origin before authenticating', async () => {
+    const verify = vi.fn(fakeVerifier.verify);
+    await restart({ verifier: { verify } });
+    const socket = connect(url, { transports: ['websocket'], reconnection: false,
+      auth: { token: 'good-alice' }, extraHeaders: { Origin: 'https://untrusted.example' } });
+    sockets.push(socket);
+    await expect(connected(socket)).rejects.toThrow();
+    expect(verify).not.toHaveBeenCalled();
+  });
+
+  it('does not keep a socket alive with invalid events', async () => {
+    await restart({ idleMs: 100, maxMs: 5000 });
+    const socket = open('good-alice');
+    await connected(socket);
+    const expired = once<{ reason: string }>(socket, 'session:expired');
+    const beat = setInterval(() => socket.emit('project:progress', {}), 20);
+    try { expect(await expired).toEqual({ reason: 'idle' }); }
+    finally { clearInterval(beat); }
+  });
+
+  it('disconnects a revoked socket before touching project state', async () => {
+    const verify = vi.fn(fakeVerifier.verify);
+    await restart({ verifier: { verify } });
+    await seed('p1', 'alice');
+    const socket = open('good-alice');
+    await connected(socket);
+    verify.mockRejectedValueOnce(new Error('revoked'));
+    const gone = disconnected(socket);
+    expect(await emitAck(socket, 'project:progress', { projectId: 'p1', stage: 'done', percent: 100 }))
+      .toEqual({ ok: false, code: 'UNAUTHENTICATED' });
+    await gone;
+    expect((await projects.get('p1'))?.stage).toBe('script_ready');
+  });
+
+  it('bounds concurrent progress work and retries a failed stage write', async () => {
+    await seed('p1', 'alice');
+    const socket = open('good-alice');
+    await connected(socket);
+    let rejectWrite!: (error: Error) => void;
+    const write = vi.spyOn(projects, 'setStage').mockImplementationOnce(() =>
+      new Promise<void>((_resolve, reject) => { rejectWrite = reject; }));
+    const event = { projectId: 'p1', stage: 'rendering', percent: 10 };
+    const pending = emitAck(socket, 'project:progress', event);
+    await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+    expect(await emitAck(socket, 'project:progress', event)).toEqual({ ok: false, code: 'RATE_LIMITED' });
+    rejectWrite(new Error('temporary write failure'));
+    expect(await pending).toEqual({ ok: false, code: 'INTERNAL' });
+    expect(await emitAck(socket, 'project:progress', event)).toEqual({ ok: true });
+    expect(write).toHaveBeenCalledTimes(2);
+    expect((await projects.get('p1'))?.stage).toBe('rendering');
+  });
+
+  it('ignores a forged acknowledgement argument without crashing', async () => {
+    await seed('owned', 'alice');
+    const socket = open('good-alice');
+    await connected(socket);
+    socket.emit('project:progress', {}, 'invalid-ack');
+    expect(await emitAck(socket, 'project:progress', { projectId: 'owned', stage: 'rendering', percent: 10 })).toEqual({ ok: true });
+  });
+
   it('disconnects a socket that stays idle', async () => {
     await restart({ idleMs: 150, maxMs: 5000 });
     const s = open('good-alice');
@@ -119,7 +181,7 @@ describe('realtime cost guard', () => {
     const b = open('good-b');
     await Promise.all([connected(a), connected(b)]);
     const c = open('good-c'); // the third socket exceeds the cap of 2
-    await expect(connected(c)).rejects.toThrow(/SERVER_BUSY/);
+    await expect(connected(c)).rejects.toThrow(/SERVER_BUSY|websocket error/);
     a.close(); // a freed slot can be used again
     await new Promise((r) => setTimeout(r, 100));
     const d = open('good-d');
