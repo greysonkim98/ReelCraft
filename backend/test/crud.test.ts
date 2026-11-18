@@ -175,3 +175,16 @@ describe('music preferences', () => {
     );
   });
 });
+
+
+describe('persisted script limits', () => {
+  it('rejects oversized scene counts and narration before writing a project', async () => {
+    const { app, projects } = setup();
+    await seed(projects, 'p1', 'alice');
+    const scene = { scene_id: 's1', caption: 'hello', voiceover: null, location_text: null };
+    for (const scenes of [Array.from({ length: 31 }, () => scene), [{ ...scene, caption: 'a'.repeat(81) }]]) {
+      expect((await request(app).patch('/api/v1/projects/p1').set(auth('alice')).send({ script: { title: 't', scenes } })).status).toBe(400);
+    }
+    expect((await projects.get('p1'))?.script.scenes).toEqual([]);
+  });
+});

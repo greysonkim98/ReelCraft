@@ -188,3 +188,43 @@ describe('env', () => {
     expect(loadEnv({ NODE_ENV: 'production', FIREBASE_PROJECT_ID: 'p' }).GROQ_MODEL).toBe('openai/gpt-oss-20b');
   });
 });
+
+
+describe('security regressions', () => {
+  it('retains the quota charge when persistence fails after an upstream answer', async () => {
+    const { app, projects, usage } = setup();
+    vi.spyOn(projects, 'create').mockRejectedValue(new Error('database unavailable'));
+    expect((await post(app, makeRequest(1))).status).toBe(500);
+    expect((await usage.get('alice', new Date().toISOString().slice(0, 10), { perUser: 2, global: 3, perIp: 0 })).used).toBe(1);
+  });
+
+  it('marks authenticated responses as non-cacheable', async () => {
+    const { app } = setup();
+    const response = await request(app).get('/api/v1/me/usage').set(auth());
+    expect(response.headers['cache-control']).toBe('no-store');
+  });
+
+  it('refuses emulator configuration in production', () => {
+    for (const name of ['FIREBASE_AUTH_EMULATOR_HOST', 'FIRESTORE_EMULATOR_HOST']) {
+      expect(() => loadEnv({ NODE_ENV: 'production', FIREBASE_PROJECT_ID: 'test', [name]: 'localhost:9099' })).toThrow(/emulators/);
+    }
+  });
+});
+
+
+describe('additional abuse regressions', () => {
+  it('does not retry a refund after its acknowledgement fails', async () => {
+    const { app, usage } = setup({ generateScript: async () => okResult(1, { calls: 0, source: 'fallback' }) });
+    const refund = vi.spyOn(usage, 'refund').mockRejectedValue(new Error('acknowledgement lost'));
+    expect((await post(app, makeRequest(1))).status).toBe(500);
+    expect(refund).toHaveBeenCalledOnce();
+  });
+
+  it('counts malformed bodies toward the burst guard before parsing them', async () => {
+    const { app } = setup();
+    for (let i = 0; i < 120; i++) {
+      expect((await request(app).post('/api/v1/ai/script').set('Content-Type', 'application/json').send('{')).status).toBe(400);
+    }
+    expect((await request(app).post('/api/v1/ai/script').set('Content-Type', 'application/json').send('{')).status).toBe(429);
+  });
+});

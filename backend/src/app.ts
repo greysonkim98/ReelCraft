@@ -76,16 +76,16 @@ export function createApp({
 
   app.set('trust proxy', env.TRUST_PROXY_HOPS);
   app.use(helmet());
+  app.use('/api', (_req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    next();
+  });
   app.use(
     cors({
       origin: env.CLIENT_ORIGIN.split(',').map((o) => o.trim()),
       credentials: true,
     }),
   );
-  // Grid images are base64 JPEGs, so that one route gets a larger body limit. It is mounted first:
-  // body-parser skips a request that is already parsed.
-  app.use('/api/v1/ai/script', express.json({ limit: SCRIPT_BODY_LIMIT }));
-  app.use(express.json({ limit: '200kb' }));
   app.use(
     pinoHttp({
       logger: log,
@@ -94,7 +94,7 @@ export function createApp({
         req: (req: { id: unknown; method: string; url: string }) => ({
           id: req.id,
           method: req.method,
-          url: req.url,
+          url: req.url.split('?')[0],
         }),
         res: (res: { statusCode: number }) => ({ statusCode: res.statusCode }),
       },
@@ -111,6 +111,11 @@ export function createApp({
       },
     }),
   );
+
+  // Grid images are base64 JPEGs, so that one route gets a larger body limit. It is mounted first:
+  // body-parser skips a request that is already parsed.
+  app.use('/api/v1/ai/script', express.json({ limit: SCRIPT_BODY_LIMIT }));
+  app.use(express.json({ limit: '200kb' }));
 
   app.use(
     '/api/v1',

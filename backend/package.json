@@ -21,7 +21,7 @@
     "pino": "^9.4.0",
     "pino-http": "^10.3.0",
     "socket.io": "^4.8.4",
-    "zod": "^3.23.8"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
@@ -30,6 +30,6 @@
     "@types/supertest": "^6.0.2",
     "socket.io-client": "^4.8.4",
     "supertest": "^7.0.0",
-    "vitest": "^2.1.0"
+    "vitest": "^4.1.12"
   }
 }

@@ -240,7 +240,7 @@ export function validateResponse(content: string, input: ScriptRequest, expected
   }
   const parsed = llmOutputSchema.safeParse(raw);
   if (!parsed.success) {
-    console.warn(`[script] schema mismatch: ${parsed.error.message.slice(0, 800)}`);
+    console.warn('[script] response schema mismatch');
     out.structural = true;
     return out;
   }
@@ -364,15 +364,15 @@ export function createScriptService(config: ScriptServiceConfig): ScriptService 
       let content: string;
       try {
         content = await callModel(model, messages, input.scenes.length, withImages);
-      } catch (err) {
-        console.warn(`[script] ${model} call failed, using fallback: ${(err as Error).message}`);
+      } catch {
+        console.warn('[script] provider call failed, using fallback');
         // No answer came back, so nothing was spent upstream: memo/tag based script, calls = 0.
         return { script: buildFallbackScript(input), source: 'fallback', model: null, calls: 0, repairedScenes: [] };
       }
 
       const checked = validateResponse(content, input, input.scenes);
       if (checked.structural) {
-        console.warn(`[script] ${model} answer failed structure check, using fallback. Raw (first 800 chars): ${content.slice(0, 800)}`);
+        console.warn('[script] response structure invalid, using fallback');
         return { script: buildFallbackScript(input), source: 'fallback', model: null, calls: 1, repairedScenes: [] };
       }
 
