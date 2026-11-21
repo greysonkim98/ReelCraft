@@ -14,11 +14,15 @@ export function Login() {
     configured,
     signIn,
     signInWithPassword,
+    signUpWithPassword,
     signOut,
     devSignIn,
   } = useAuth();
   const [email, setEmail] = useState(''),
     [password, setPassword] = useState(''),
+    [confirm, setConfirm] = useState(''),
+    [creating, setCreating] = useState(false),
+    [formError, setFormError] = useState<string | null>(null),
     [busy, setBusy] = useState(false);
   // Wait for the role: leaving the page earlier cancels the profile request that is still in flight.
   // Admins (set by hand in the console) go to the management console, everyone else to their projects.
@@ -43,9 +47,9 @@ export function Login() {
               Google sign-in is not configured yet. You can still explore the studio preview below.
             </div>
           )}
-          {error && (
+          {(formError ?? error) && (
             <p className="notice error" role="alert">
-              {error}
+              {formError ?? error}
             </p>
           )}
           {sessionError && (
@@ -59,9 +63,15 @@ export function Login() {
           <form
             onSubmit={async (event) => {
               event.preventDefault();
+              setFormError(null);
+              if (creating) {
+                if (password.length < 8) return setFormError('Use at least 8 characters.');
+                if (password !== confirm) return setFormError('The passwords do not match.');
+              }
               setBusy(true);
               try {
-                await signInWithPassword(email, password);
+                if (creating) await signUpWithPassword(email, password);
+                else await signInWithPassword(email, password);
               } finally {
                 setBusy(false);
               }
@@ -81,15 +91,47 @@ export function Login() {
               Password
               <input
                 type="password"
-                autoComplete="current-password"
+                autoComplete={creating ? 'new-password' : 'current-password'}
                 required
+                minLength={creating ? 8 : undefined}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
               />
             </label>
+            {creating && (
+              <label className="field">
+                Confirm password
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  required
+                  value={confirm}
+                  onChange={(e) => setConfirm(e.target.value)}
+                />
+              </label>
+            )}
             <button className="button primary" disabled={!configured || loading || busy}>
-              {busy ? 'Signing in…' : 'Sign in with email'}
+              {creating
+                ? busy
+                  ? 'Creating account…'
+                  : 'Create account'
+                : busy
+                  ? 'Signing in…'
+                  : 'Sign in with email'}
             </button>
+            <p className="login-terms">
+              {creating ? 'Already have an account? ' : 'New to ReelCraft? '}
+              <button
+                type="button"
+                className="text-link"
+                onClick={() => {
+                  setCreating(!creating);
+                  setFormError(null);
+                }}
+              >
+                {creating ? 'Sign in' : 'Create an account'}
+              </button>
+            </p>
           </form>
           <button
             onClick={() => void signIn()}

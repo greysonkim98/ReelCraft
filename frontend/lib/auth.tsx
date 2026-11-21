@@ -2,6 +2,7 @@
 
 import {
   GoogleAuthProvider,
+  browserPopupRedirectResolver,
   createUserWithEmailAndPassword,
   getRedirectResult,
   onAuthStateChanged,
@@ -40,6 +41,8 @@ interface AuthState {
   configured: boolean;
   signIn: () => Promise<void>;
   signInWithPassword: (email: string, password: string) => Promise<void>;
+  /** Creates an email/password account. The server profile (users/{uid}) is created by the session sync. */
+  signUpWithPassword: (email: string, password: string) => Promise<void>;
   /** Emulator-only sign-in without Google. Undefined in production builds. */
   devSignIn?: () => Promise<void>;
   signOut: () => Promise<void>;
@@ -55,6 +58,15 @@ function authErrorMessage(e: unknown): string {
     return 'This address is not an authorized sign-in domain for the project.';
   if (code === 'auth/network-request-failed')
     return 'Network error. Check your connection and try again.';
+  if (code === 'auth/operation-not-allowed')
+    return 'This sign-in method is not enabled in the Firebase console (Authentication > Sign-in method).';
+  if (code === 'auth/email-already-in-use')
+    return 'An account with this email already exists. Sign in instead.';
+  if (code === 'auth/invalid-email') return 'Enter a valid email address.';
+  if (code === 'auth/weak-password') return 'Choose a stronger password (at least 8 characters).';
+  if (code === 'auth/too-many-requests') return 'Too many attempts. Wait a moment and try again.';
+  if (code === 'auth/account-exists-with-different-credential')
+    return 'An account already exists with this email using a different sign-in method.';
   return (e as Error).message;
 }
 
@@ -95,7 +107,9 @@ export function AuthProvider({
     const auth = getAuthClient(mode);
     if (mode === 'signin') {
       // Completes a redirect sign-in that just returned from Google.
-      getRedirectResult(auth).catch((e: Error) => setError(e.message));
+      getRedirectResult(auth, browserPopupRedirectResolver).catch((e: unknown) =>
+        setError(authErrorMessage(e)),
+      );
     }
     return onAuthStateChanged(auth, (u) => {
       const seq = ++sessionSeq.current;
@@ -125,7 +139,7 @@ export function AuthProvider({
     try {
       // A popup works on every host. The redirect flow silently loses the result when the app
       // (e.g. localhost) and authDomain are different sites, because browsers partition storage.
-      await signInWithPopup(auth, provider);
+      await signInWithPopup(auth, provider, browserPopupRedirectResolver);
     } catch (e) {
       const code = (e as { code?: string }).code;
       if (
@@ -133,7 +147,7 @@ export function AuthProvider({
         code === 'auth/operation-not-supported-in-this-environment'
       ) {
         try {
-          await signInWithRedirect(auth, provider);
+          await signInWithRedirect(auth, provider, browserPopupRedirectResolver);
         } catch (e2) {
           setError(authErrorMessage(e2));
         }
@@ -162,8 +176,25 @@ export function AuthProvider({
       setError(null);
       try {
         await signInWithEmailAndPassword(getAuthClient(mode), email.trim(), password);
-      } catch {
-        setError('Sign-in failed. Check your email and password.');
+      } catch (e) {
+        const code = (e as { code?: string }).code;
+        setError(
+          code === 'auth/too-many-requests' || code === 'auth/network-request-failed'
+            ? authErrorMessage(e)
+            : 'Sign-in failed. Check your email and password.',
+        );
+      }
+    },
+    [mode],
+  );
+
+  const signUpWithPassword = useCallback(
+    async (email: string, password: string) => {
+      setError(null);
+      try {
+        await createUserWithEmailAndPassword(getAuthClient(mode), email.trim(), password);
+      } catch (e) {
+        setError(authErrorMessage(e));
       }
     },
     [mode],
@@ -189,6 +220,7 @@ export function AuthProvider({
       configured,
       signIn,
       signInWithPassword,
+      signUpWithPassword,
       devSignIn: AUTH_EMULATOR ? devSignIn : undefined,
       signOut,
       getToken,
@@ -202,6 +234,7 @@ export function AuthProvider({
       configured,
       signIn,
       signInWithPassword,
+      signUpWithPassword,
       devSignIn,
       signOut,
       getToken,
