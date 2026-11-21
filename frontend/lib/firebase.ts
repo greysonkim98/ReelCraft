@@ -24,14 +24,14 @@ export function firebaseConfigured(): boolean {
 }
 
 /**
- * Browsers partition third-party storage, which breaks signInWithRedirect when the sign-in helper
- * lives on another domain than the app. On Firebase Hosting both *.web.app and *.firebaseapp.com
- * serve /__/auth/*, so the app's own host works as authDomain. Localhost keeps the configured one
- * (use the Auth emulator there).
+ * Always use the configured authDomain (<project>.firebaseapp.com). Google only accepts the redirect
+ * URI https://<authDomain>/__/auth/handler when it is registered on the OAuth client, and Firebase
+ * registers only the firebaseapp.com one by default. Using the app's own host (e.g. *.web.app)
+ * causes "400: redirect_uri_mismatch". The popup flow used for sign-in works across domains.
+ * Falls back to the host only when no authDomain is configured.
  */
 export function resolveAuthDomain(host: string, configured: string | undefined): string | undefined {
-  const local = host === 'localhost' || host === '127.0.0.1' || host.startsWith('localhost:') || host.startsWith('127.0.0.1:');
-  return local ? configured : host;
+  return configured || host;
 }
 
 function getApp(): FirebaseApp {
