@@ -43,4 +43,8 @@ const nextConfig = {
       }),
 };
 
-module.exports = nextConfig;
+// Keep dev output separate so production builds cannot overwrite a running dev server's chunks.
+module.exports = (phase) => ({
+  ...nextConfig,
+  distDir: phase === 'phase-development-server' ? '.next-dev' : '.next',
+});

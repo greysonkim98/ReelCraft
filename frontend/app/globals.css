@@ -666,6 +666,46 @@ select {
   padding: 8px 10px;
   font-size: 11px;
 }
+.examples-intro {
+  margin: 0 0 22px;
+  color: #9ba4a5;
+  font-size: 14px;
+}
+.example-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 20px;
+}
+.example-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #2d3335;
+  border-radius: 10px;
+  background: #191d20;
+}
+.example-video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  max-height: 420px;
+  object-fit: contain;
+  background: #080b0c;
+}
+.example-video:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: -2px;
+}
+.example-card-content {
+  padding: 16px;
+}
+.example-card-content h3 {
+  font-size: 16px;
+}
+.example-card-content p {
+  margin-top: 6px;
+  color: #9ba4a5;
+  font-size: 14px;
+}
 .project-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

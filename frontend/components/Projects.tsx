@@ -1,42 +1,27 @@
-'use client';
-import Link from 'next/link';
-import { useState } from 'react';
-import { usePreviewProjects, type PreviewProject } from '@/lib/preview-projects';
-import { Dialog } from './ui/Dialog';
 import { Icon } from './ui/Icon';
 
+const EXAMPLE_REELS = [
+  {
+    id: 'example-01',
+    title: 'Example reel 01',
+    src: '/examples/reelcraft-2026-10-30.mp4',
+    description: 'A little inspiration for your next story.',
+  },
+  {
+    id: 'example-02',
+    title: 'Example reel 02',
+    src: '/examples/reelcraft-2026-11-08.mp4',
+    description: 'See how a collection of clips comes together.',
+  },
+  {
+    id: 'subtitled-example',
+    title: 'A story with subtitles',
+    src: '/examples/reel_subtitled.mp4',
+    description: 'An example reel with subtitles.',
+  },
+];
+
 export function Projects() {
-  const { projects, update, storageError } = usePreviewProjects();
-  const [filter, setFilter] = useState('All projects');
-  const [search, setSearch] = useState('');
-  const [sort, setSort] = useState('recent');
-  const [view, setView] = useState<'grid' | 'list'>('grid');
-  const [editing, setEditing] = useState<PreviewProject | null>(null);
-  const [deleting, setDeleting] = useState<PreviewProject | null>(null);
-  const [title, setTitle] = useState('');
-  const [toast, setToast] = useState('');
-  const filtered = projects
-    .filter(
-      (p) =>
-        (filter === 'All projects' || p.status === filter) &&
-        p.title.toLowerCase().includes(search.toLowerCase()),
-    )
-    .sort((a, b) =>
-      sort === 'name' ? a.title.localeCompare(b.title) : b.updated.localeCompare(a.updated),
-    );
-  function duplicate(project: PreviewProject) {
-    update([
-      {
-        ...project,
-        id: crypto.randomUUID(),
-        title: `${project.title} (copy)`,
-        status: 'Draft',
-        updated: new Date().toISOString(),
-      },
-      ...projects,
-    ]);
-    setToast('A copy was added to your preview projects.');
-  }
   return (
     <>
       <div className="page-heading">
@@ -80,22 +65,17 @@ export function Projects() {
             <Icon name="film" />
           </span>
           <div>
-            <strong>{projects.length.toString().padStart(2, '0')}</strong>
-            <span>Preview projects</span>
+            <strong>{EXAMPLE_REELS.length.toString().padStart(2, '0')}</strong>
+            <span>Example reels</span>
           </div>
         </div>
         <div>
           <span className="stat-icon">
-            <Icon name="check" />
+            <Icon name="play" />
           </span>
           <div>
-            <strong>
-              {projects
-                .filter((p) => p.status === 'Ready')
-                .length.toString()
-                .padStart(2, '0')}
-            </strong>
-            <span>Ready in preview</span>
+            <strong>Press play</strong>
+            <span>See ReelCraft in action</span>
           </div>
         </div>
         <div>
@@ -108,257 +88,44 @@ export function Projects() {
           </div>
         </div>
       </div>
-      <section aria-labelledby="projects-heading">
+      <section aria-labelledby="examples-heading">
         <div className="section-heading">
-          <h2 id="projects-heading">
-            Your collection <span className="count-pill">{projects.length}</span>
+          <h2 id="examples-heading">
+            Example reels <span className="count-pill">{EXAMPLE_REELS.length}</span>
           </h2>
-          <div className="view-toggle" aria-label="Project layout">
-            <button
-              aria-label="Grid view"
-              aria-pressed={view === 'grid'}
-              onClick={() => setView('grid')}
-              className={view === 'grid' ? 'selected' : ''}
-            >
-              <Icon name="grid" size={17} />
-            </button>
-            <button
-              aria-label="List view"
-              aria-pressed={view === 'list'}
-              onClick={() => setView('list')}
-              className={view === 'list' ? 'selected' : ''}
-            >
-              <Icon name="list" size={17} />
-            </button>
-          </div>
         </div>
-        <div className="collection-toolbar">
-          <div className="tabs" aria-label="Filter projects">
-            {['All projects', 'Draft', 'Ready'].map((item) => (
-              <button
-                key={item}
-                className={filter === item ? 'selected' : ''}
-                aria-pressed={filter === item}
-                onClick={() => setFilter(item)}
+        <p className="examples-intro">
+          See what you can make with ReelCraft. Play an example, then bring your own clips.
+        </p>
+        <div className="example-grid">
+          {EXAMPLE_REELS.map((example) => (
+            <article className="example-card" key={example.id}>
+              <video
+                className="example-video"
+                controls
+                playsInline
+                preload="metadata"
+                aria-labelledby={`${example.id}-title`}
               >
-                {item === 'Draft' ? 'Drafts' : item === 'Ready' ? 'Ready to share' : item}
-              </button>
-            ))}
-          </div>
-          <div className="collection-tools">
-            <label className="search-field">
-              <Icon name="search" size={17} />
-              <input
-                aria-label="Search projects"
-                placeholder="Search projects…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-            </label>
-            <select
-              aria-label="Sort projects"
-              value={sort}
-              onChange={(e) => setSort(e.target.value)}
-            >
-              <option value="recent">Last edited</option>
-              <option value="name">Name A–Z</option>
-            </select>
-          </div>
-        </div>
-        <div className={`project-grid ${view === 'list' ? 'project-list' : ''}`}>
-          {filtered.map((project) => (
-            <article className="project-card" key={project.id}>
-              <Link
-                className="project-image"
-                href={`/projects/details?id=${encodeURIComponent(project.id)}`}
-                aria-label={`Open ${project.title}`}
-              >
-                <img src={project.image} alt="" />
-                <span className={`status-pill ${project.status === 'Ready' ? 'ready' : 'draft'}`}>
-                  <span />
-                  {project.status === 'Ready' ? 'Ready to share' : 'Draft'}
-                </span>
-                <span className="duration-pill">
-                  <Icon name="play" size={11} />
-                  {project.duration}
-                </span>
-                <span className="project-open">
-                  <Icon name="arrow" />
-                </span>
-              </Link>
-              <div className="project-card-content">
-                <div className="project-title-row">
-                  <h3>
-                    <Link href={`/projects/details?id=${encodeURIComponent(project.id)}`}>
-                      {project.title}
-                    </Link>
-                  </h3>
-                  <button
-                    className="icon-button"
-                    aria-label={`Rename ${project.title}`}
-                    onClick={() => {
-                      setEditing(project);
-                      setTitle(project.title);
-                    }}
-                  >
-                    <Icon name="edit" size={16} />
-                  </button>
-                </div>
-                <p>
-                  {project.clips} clips <span>·</span> {project.look} look <span>·</span> 9:16
-                </p>
-                <div className="project-card-footer">
-                  <span>
-                    <Icon name="clock" size={13} />
-                    {new Date(project.updated).toLocaleDateString('en-US', {
-                      month: 'short',
-                      day: 'numeric',
-                    })}
-                  </span>
-                  <div>
-                    <button
-                      className="icon-button"
-                      aria-label={`Duplicate ${project.title}`}
-                      onClick={() => duplicate(project)}
-                    >
-                      <Icon name="copy" size={15} />
-                    </button>
-                    <button
-                      className="icon-button"
-                      aria-label={`Delete ${project.title}`}
-                      onClick={() => setDeleting(project)}
-                    >
-                      <Icon name="trash" size={15} />
-                    </button>
-                  </div>
-                </div>
+                <source src={example.src} type="video/mp4" />
+                Your browser does not support video playback.{' '}
+                <a href={example.src}>Download {example.title}</a> to watch it.
+              </video>
+              <div className="example-card-content">
+                <h3 id={`${example.id}-title`}>{example.title}</h3>
+                <p>{example.description}</p>
               </div>
             </article>
           ))}
-          {filter === 'All projects' && !search && (
-            <a href="/editor" className="new-project-card">
-              <span>
-                <Icon name="plus" size={26} />
-              </span>
-              <strong>A new story starts here</strong>
-              <p>
-                Turn your favorite clips into
-                <br />
-                your next favorite reel.
-              </p>
-              <span className="text-link">
-                Create a reel <Icon name="arrow" size={15} />
-              </span>
-            </a>
-          )}
         </div>
-        {filtered.length === 0 && (
-          <div className="empty-state">
-            <Icon name="film" size={36} />
-            <h3>{search ? 'No stories found' : 'A fresh start for your stories'}</h3>
-            <p>
-              {search
-                ? 'Try a different title or switch to all projects.'
-                : 'Create a reel to get started, or explore another filter.'}
-            </p>
-            <button
-              className="button secondary"
-              onClick={() => {
-                setFilter('All projects');
-                setSearch('');
-              }}
-            >
-              Show all projects
-            </button>
-          </div>
-        )}
       </section>
       <div className="preview-note">
-        <Icon name="grid" size={16} />
+        <Icon name="film" size={16} />
         <p>
-          <strong>Workspace preview.</strong> These are sample projects. Rename, duplicate, and
-          delete changes stay in this browser; cloud saving and restoring edit plans are not
-          connected yet.
+          <strong>A little inspiration.</strong> These are example videos, not saved projects.
+          Create a reel with your own clips and download it to keep it.
         </p>
       </div>
-      {storageError && (
-        <p role="alert" className="notice error">
-          {storageError}
-        </p>
-      )}
-      {toast && (
-        <div role="status" className="toast">
-          {toast}
-          <button
-            className="icon-button"
-            aria-label="Dismiss notification"
-            onClick={() => setToast('')}
-          >
-            <Icon name="close" size={16} />
-          </button>
-        </div>
-      )}
-      {editing && (
-        <Dialog title="Rename project" onClose={() => setEditing(null)}>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (!title.trim()) return;
-              update(
-                projects.map((p) =>
-                  p.id === editing.id
-                    ? { ...p, title: title.trim(), updated: new Date().toISOString() }
-                    : p,
-                ),
-              );
-              setEditing(null);
-              setToast('Project name updated in this browser.');
-            }}
-          >
-            <label className="field">
-              Project name
-              <input
-                autoFocus
-                required
-                maxLength={80}
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-              />
-            </label>
-            <div className="dialog-actions">
-              <button type="button" className="button secondary" onClick={() => setEditing(null)}>
-                Cancel
-              </button>
-              <button className="button primary" disabled={!title.trim()}>
-                Save name
-              </button>
-            </div>
-          </form>
-        </Dialog>
-      )}
-      {deleting && (
-        <Dialog title="Delete preview project?" onClose={() => setDeleting(null)}>
-          <p>
-            Remove “{deleting.title}” from this browser’s sample collection? Your original video
-            files are unaffected.
-          </p>
-          <div className="dialog-actions">
-            <button className="button secondary" onClick={() => setDeleting(null)}>
-              Keep project
-            </button>
-            <button
-              className="button danger"
-              onClick={() => {
-                update(projects.filter((p) => p.id !== deleting.id));
-                setDeleting(null);
-                setToast('Preview project deleted.');
-              }}
-            >
-              Delete project
-            </button>
-          </div>
-        </Dialog>
-      )}
     </>
   );
 }
